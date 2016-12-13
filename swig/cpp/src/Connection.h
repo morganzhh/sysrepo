@@ -28,7 +28,7 @@
 #include "Internal.h"
 
 extern "C" {
-#include "sysrepo.h"
+#include <sysrepo.h>
 }
 
 class Connection

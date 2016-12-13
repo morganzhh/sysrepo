@@ -35,7 +35,7 @@
 #include "Session.h"
 
 extern "C" {
-#include "sysrepo.h"
+#include <sysrepo.h>
 }
 
 using namespace std;
@@ -44,7 +44,7 @@ class Session
 {
 
 public:
-    Session(S_Connection conn, sr_datastore_t datastore = (sr_datastore_t) DS_RUNNING, \
+    Session(S_Connection conn, sr_datastore_t datastore = static_cast<sr_datastore_t>( DS_RUNNING ), \
             const sr_sess_options_t opts = SESS_DEFAULT, const char *user_name = NULL);
     Session(sr_session_ctx_t *sess, sr_sess_options_t opts = SESS_DEFAULT);
     void session_stop();
@@ -90,15 +90,15 @@ public:
     Callback();
     virtual ~Callback();
 
-    virtual int module_change(S_Session session, const char *module_name, sr_notif_event_t event, void *private_ctx) {return SR_ERR_OK;};
-    virtual int subtree_change(S_Session session, const char *xpath, sr_notif_event_t event, void *private_ctx) {return SR_ERR_OK;};
-    virtual void module_install(const char *module_name, const char *revision, sr_module_state_t state, void *private_ctx) {return;};
-    virtual void feature_enable(const char *module_name, const char *feature_name, bool enabled, void *private_ctx) {return;};
-    virtual int rpc(const char *xpath, S_Vals input, S_Vals_Holder output, void *private_ctx) {return SR_ERR_OK;};
-    virtual int rpc_tree(const char *xpath, S_Trees input, S_Trees_Holder output, void *private_ctx) {return SR_ERR_OK;};
-    virtual int dp_get_items(const char *xpath, S_Vals_Holder vals, void *private_ctx) {return SR_ERR_OK;};
-    virtual void event_notif(const char *xpath, S_Vals vals, void *private_ctx) {return;};
-    virtual void event_notif_tree(const char *xpath, S_Trees trees, void *private_ctx) {return;};
+    virtual int module_change(S_Session , const char *, sr_notif_event_t , void *) {return SR_ERR_OK;};
+    virtual int subtree_change(S_Session , const char *, sr_notif_event_t , void *) {return SR_ERR_OK;};
+    virtual void module_install(const char *, const char *, sr_module_state_t , void *) {return;};
+    virtual void feature_enable(const char *, const char *, bool , void *) {return;};
+    virtual int rpc(const char *, S_Vals , S_Vals_Holder , void *) {return SR_ERR_OK;};
+    virtual int rpc_tree(const char *, S_Trees , S_Trees_Holder , void *) {return SR_ERR_OK;};
+    virtual int dp_get_items(const char *, S_Vals_Holder , void *) {return SR_ERR_OK;};
+    virtual void event_notif(const char *, S_Vals , void *) {return;};
+    virtual void event_notif_tree(const char *, S_Trees , void *) {return;};
     Callback *get() {return this;};
 
     std::map<const char *, void*> private_ctx;
@@ -132,7 +132,7 @@ public:
     sr_subscription_ctx_t *swig_sub;
     S_Session swig_sess;
     std::vector<void*> wrap_cb_l;
-    void additional_cleanup(void *private_ctx) {return;};
+    void additional_cleanup(void *) {return;};
 
 private:
     sr_subscription_ctx_t *_sub;

@@ -27,7 +27,7 @@
 #include "Sysrepo.h"
 
 extern "C" {
-#include "sysrepo.h"
+#include <sysrepo.h>
 }
 
 using namespace std;

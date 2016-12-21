@@ -832,6 +832,10 @@ sr_get_item(sr_session_ctx_t *session, const char *xpath, sr_val_t **value)
 
     /* send the request and receive the response */
     rc = cl_request_process(session, msg_req, &msg_resp, NULL, SR__OPERATION__GET_ITEM);
+    if (SR_ERR_NOT_FOUND == rc) {
+        /* not an error, so no logging, but we still need to clean up and we won't be copying values */
+        goto cleanup;
+    }
     CHECK_RC_MSG_GOTO(rc, cleanup, "Error by processing of the request.");
 
     /* duplicate the content of gpb to sr_val_t */
@@ -879,6 +883,10 @@ sr_get_items(sr_session_ctx_t *session, const char *xpath, sr_val_t **values, si
 
     /* send the request and receive the response */
     rc = cl_request_process(session, msg_req, &msg_resp, NULL, SR__OPERATION__GET_ITEMS);
+    if (SR_ERR_NOT_FOUND == rc) {
+        /* not an error, so no logging, but we still need to clean up and we won't be copying values */
+        goto cleanup;
+    }
     CHECK_RC_MSG_GOTO(rc, cleanup, "Error by processing of the request.");
 
     /* copy the content of gpb values to sr_val_t */
@@ -3374,6 +3382,8 @@ sr_event_notif_send(sr_session_ctx_t *session, const char *xpath,
                              &msg_req->request->event_notif_req->n_values);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Error by copying event notification values to GPB.");
 
+    msg_req->request->event_notif_req->timestamp = time(NULL);
+
     /* send the request and receive the response */
     rc = cl_request_process(session, msg_req, &msg_resp, NULL, SR__OPERATION__EVENT_NOTIF);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Error by processing of the request.");
@@ -3430,6 +3440,8 @@ sr_event_notif_send_tree(sr_session_ctx_t *session, const char *xpath,
     rc = sr_trees_sr_to_gpb(trees, tree_cnt, &msg_req->request->event_notif_req->trees,
                              &msg_req->request->event_notif_req->n_trees);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Error by copying event notification trees to GPB.");
+
+    msg_req->request->event_notif_req->timestamp = time(NULL);
 
     /* send the request and receive the response */
     rc = cl_request_process(session, msg_req, &msg_resp, NULL, SR__OPERATION__EVENT_NOTIF);

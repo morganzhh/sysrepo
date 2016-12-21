@@ -99,11 +99,12 @@ public:
     virtual void module_install(const char *, const char *, sr_module_state_t , void *) {return;};
     virtual void feature_enable(const char *, const char *, bool , void *) {return;};
     virtual int rpc(const char *, S_Vals , S_Vals_Holder , void *) {return SR_ERR_OK;};
+    virtual int action(const char *, S_Vals , S_Vals_Holder , void *) {return SR_ERR_OK;};
     virtual int rpc_tree(const char *, S_Trees , S_Trees_Holder , void *) {return SR_ERR_OK;};
     virtual void action_tree(const char *, S_Trees , S_Trees_Holder , void *) {return;};
     virtual int dp_get_items(const char *, S_Vals_Holder , void *) {return SR_ERR_OK;};
-    virtual void event_notif(const char *, S_Vals , void *) {return;};
-    virtual void event_notif_tree(const char *, S_Trees , void *) {return;};
+    virtual void event_notif(const char *, S_Vals , time_t , void *) {return;};
+    virtual void event_notif_tree(const char *, S_Trees , time_t , void *) {return;};
 
     Callback *get() {return this;};
 

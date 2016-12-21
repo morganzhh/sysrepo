@@ -1270,6 +1270,7 @@ md_get_imported_module(const md_ctx_t *md_ctx, const struct lys_module *orig_mod
     md_module_t *imp_module = NULL;
     struct lys_module *imp_module_schema = NULL;
     md_module_t module_lkp = { 0, };
+    
 
     for (size_t i = 0; i < orig_module->imp_size; ++i) {
         imp_module_schema = orig_module->imp[i].module;
@@ -1328,6 +1329,7 @@ md_collect_data_dependencies(md_ctx_t *md_ctx, const char *ref, md_module_t *mod
         if (SR_ERR_OK != md_add_dependency(module->deps, MD_DEP_DATA, module2, true, orig_module) ||
             SR_ERR_OK != md_add_dependency(module2->inv_deps, MD_DEP_DATA, module, true, orig_module)) {
             SR_LOG_ERR_MSG("Failed to add an edge into the dependency graph.");
+            
             rc = SR_ERR_INTERNAL;
             goto cleanup;
         }
@@ -1381,6 +1383,7 @@ md_traverse_schema_tree(md_ctx_t *md_ctx, md_module_t *module, struct lys_node *
     }
 
     main_module_schema = MD_MAIN_MODULE(root);
+    SR_LOG_ERR("I AM THE ROOT MODULE====>%s", main_module_schema->name);
     dest_module = (augment ? md_get_destination_module(md_ctx, module, root) : module);
     if (NULL == dest_module) {
         /* shouldn't happen as all imports are already processed */
@@ -1391,11 +1394,21 @@ md_traverse_schema_tree(md_ctx_t *md_ctx, md_module_t *module, struct lys_node *
     /* schema traversal (non-recursive DFS post-order on each root) */
     do {
         node = root;
+        if (LYS_AUGMENT == node->nodetype)
+        {
+                        SR_LOG_ERR("Augment fixing %d", __LINE__);
+                        continue;
+        }
+
+        SR_LOG_ERR("======First do node name %s type 0x%x this is root 0x%x=====Start", node->name, node->nodetype, node);
         do {
             /* skip groupings */
             if (LYS_GROUPING == node->nodetype) {
+                SR_LOG_ERR("Second do node name %s type 0x%x skipping", node->name, node->nodetype);
                 goto next_node;
             }
+            
+            SR_LOG_ERR("Second do node name %s type 0x%x processing deep %d", node->name, node->nodetype,process_children);
 
             /* go as deep as possible */
             if (process_children) {
@@ -1405,6 +1418,8 @@ md_traverse_schema_tree(md_ctx_t *md_ctx, md_module_t *module, struct lys_node *
                 }
             }
 
+            SR_LOG_ERR("Second do real node name %s type 0x%x", node->name, node->nodetype);
+            
             /* process node based on its type */
             when = NULL;
             must_size = 0;
@@ -1609,6 +1624,7 @@ md_traverse_schema_tree(md_ctx_t *md_ctx, md_module_t *module, struct lys_node *
 #define PRIV_CFG_SUBTREE 2
             rc = SR_ERR_OK;
             if (LYS_USES == node->nodetype) {
+                SR_LOG_ERR("Second do node name %s type 0x%x skipping uses", node->name, node->nodetype);
                 /* skip */
             } else if (LYS_CONFIG_R & node->flags) {
                 /*< this node has operational data (and all descendands as well) */
@@ -1661,20 +1677,38 @@ md_traverse_schema_tree(md_ctx_t *md_ctx, md_module_t *module, struct lys_node *
                 parent->priv = (void *)((intptr_t)parent->priv | PRIV_CFG_SUBTREE);
             }
 next_node:
-            /* backtracking + automatically moving to the next sibling if there is any */
+            SR_LOG_ERR("Second do [nextpart] node name %s type 0x%x mem 0x%x root name %s type %d", node->name, node->nodetype, node,  root->name, root->nodetype);
+                        
+/* backtracking + automatically moving to the next sibling if there is any */
             if (node != root) {
+
+                if (node->next)
+                {
+                    SR_LOG_ERR("next node has module name %s ", (MD_MAIN_MODULE(node->next))->name);
+                }
+
                 if (node->next && main_module_schema == MD_MAIN_MODULE(node->next)) {
                     node = node->next;
                     process_children = true;
+                    SR_LOG_ERR("go to the next node name %s type 0x%x module %s ", node->name, node->nodetype, MD_MAIN_MODULE(node)->name);
                 } else {
                     node = node->parent;
+                    if (LYS_AUGMENT == node->nodetype)
+                    {
+                        SR_LOG_ERR("Augment fixing %d", __LINE__);
+                        node = ((struct lys_node_augment *)(node))->target;
+                    }
+
                     process_children = false;
+                    SR_LOG_ERR("go to my parent node name %s type 0x%x ", node->name, node->nodetype);
                 }
             } else {
+                SR_LOG_ERR("I am the root node name %s type 0x%x ", node->name, node->nodetype);
                 process_children = true;
                 break;
             }
         } while (node);
+        SR_LOG_ERR("======First do node name %s type 0x%x this is root 0x%x=====End", node->name, node->nodetype,node);        
     } while (!augment && NULL != (root = root->next) && MD_MAIN_MODULE(root) == main_module_schema);
 
     return SR_ERR_OK;

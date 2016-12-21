@@ -851,6 +851,7 @@ srctl_data_install(const struct lys_module *module, const char *owner, const cha
         }
     }
 
+    printf("starting for \r\n");
     /* install data files for imported module */
     for (size_t i = 0; i < module->imp_size; i++) {
         if (NULL == module->imp[i].module->filepath) {
@@ -858,12 +859,16 @@ srctl_data_install(const struct lys_module *module, const char *owner, const cha
             continue;
         }
         printf("Resolving dependency: '%s' imports '%s'...\n", module->name, module->imp[i].module->name);
+        printf("I am the one\r\n");
         rc = srctl_data_install(module->imp[i].module, owner, permissions);
+        printf("no, I am not !!!!!!!the one\r\n");
         if (SR_ERR_OK != rc) {
             fprintf(stderr, "Error: Unable to resolve the dependency on '%s'.\n", module->imp[i].module->name);
             goto fail;
         }
     }
+
+    printf("I am installed data\r\n");
 
     goto cleanup;
 
@@ -896,7 +901,7 @@ srctl_install(const char *yang, const char *yin, const char *owner, const char *
         fprintf(stderr, "Error: Either YANG or YIN file must be specified for --install operation.\n");
         goto fail;
     }
-    printf("Installing a new module from file '%s'...\n", (NULL != yang) ? yang : yin);
+    printf("Installing a new module from filedddddddd '%s'...\n", (NULL != yang) ? yang : yin);
 
     /* extract the search directory path */
     if (NULL == search_dir) {
@@ -915,6 +920,7 @@ srctl_install(const char *yang, const char *yin, const char *owner, const char *
         goto fail;
     }
 
+    printf("md ini\r\n");
     /* init module dependencies context */
     ret = md_init(srctl_schema_search_dir, srctl_internal_schema_search_dir,
             srctl_internal_data_search_dir, true, &md_ctx);
@@ -922,7 +928,7 @@ srctl_install(const char *yang, const char *yin, const char *owner, const char *
         fprintf(stderr, "Error: Failed to initialize module dependencies context.\n");
         goto fail;
     }
-
+    printf("md end\r\n");
     /* load the module into libyang ctx to get module information */
     module = lys_parse_path(ly_ctx, (NULL != yin) ? yin : yang, (NULL != yin) ? LYS_IN_YIN : LYS_IN_YANG);
     if (NULL == module) {
@@ -930,26 +936,33 @@ srctl_install(const char *yang, const char *yin, const char *owner, const char *
         goto fail;
      }
 
+    printf("parse ed\r\n");    
     /* Install schema files */
     rc = srctl_schema_install(module, yang, yin);
     if (SR_ERR_OK != rc) {
         goto fail;
     }
-
+    printf("install chema end ed\r\n");    
     /* Install data files */
     rc = srctl_data_install(module, owner, permissions);
     if (SR_ERR_OK != rc) {
         goto fail_data;
     }
-
+    printf("data end\r\n");
     /* Update dependencies */
     if (NULL != yin) {
         srctl_get_yin_path(module->name, module->rev[0].date, schema_dst, PATH_MAX);
     }
     else if (NULL != yang) {
+            printf("get yang start\r\n");
         srctl_get_yang_path(module->name, module->rev[0].date, schema_dst, PATH_MAX);
+        printf("get yang start end\r\n");
     }
+    
+    printf("here iam imxxxxxxxxxxxxxxx\r\n");
+
     rc = md_insert_module(md_ctx, schema_dst, &implicitly_installed);
+    printf("here iam returneddddddddddddddd\r\n");    
     if (SR_ERR_DATA_EXISTS == rc) {
         printf("The module is already installed, exiting...\n");
         rc = SR_ERR_OK; /*< do not treat as error */

@@ -40,6 +40,7 @@
 #include "persistence_manager.h"
 #include "rp_dt_edit.h"
 #include "module_dependencies.h"
+#include "nacm.h"
 
 /**
  * @brief Data manager context holding loaded schemas, data trees
@@ -50,6 +51,7 @@ typedef struct dm_ctx_s {
     np_ctx_t *np_ctx;             /**< Notification Processor context */
     pm_ctx_t *pm_ctx;             /**< Persistence Manager context */
     md_ctx_t *md_ctx;             /**< Module Dependencies context */
+    nacm_ctx_t *nacm_ctx;         /**< NACM context */
     cm_connection_mode_t conn_mode;  /**< Mode in which Connection Manager operates */
     char *schema_search_dir;      /**< location where schema files are located */
     char *data_search_dir;        /**< location where data files are located */
@@ -80,11 +82,13 @@ typedef struct dm_session_s {
 } dm_session_t;
 
 /**
- * @brief Info structure for the node holds the state of the running data store.
+ * @brief Info structure for the node which holds its state in the running data store
+ * and a hash of its xpath in the schema tree.
  * (It will hold information about notification subscriptions.)
  */
 typedef struct dm_node_info_s {
     dm_node_state_t state;
+    uint32_t xpath_hash;
 } dm_node_info_t;
 
 /** @brief Invalid value for the commit context id, used for signaling e.g.: duplicate id */
@@ -185,6 +189,33 @@ dm_c_ctx_id_cmp(const void *a, const void *b)
     } else {
         return 1;
     }
+}
+
+int
+dm_set_node_state(struct lys_node *node, dm_node_state_t state)
+{
+    CHECK_NULL_ARG(node);
+    if (NULL == node->priv) {
+        node->priv = calloc(1, sizeof(dm_node_info_t));
+        CHECK_NULL_NOMEM_RETURN(node->priv);
+    }
+    ((dm_node_info_t *) node->priv)->state = state;
+    return SR_ERR_OK;
+}
+
+/**
+ * @brief Sets the hash value associated with the xpath of the given schema node.
+ */
+static int
+dm_set_node_xpath_hash(struct lys_node *node, uint32_t hash)
+{
+    CHECK_NULL_ARG(node);
+    if (NULL == node->priv) {
+        node->priv = calloc(1, sizeof(dm_node_info_t));
+        CHECK_NULL_NOMEM_RETURN(node->priv);
+    }
+    ((dm_node_info_t *) node->priv)->xpath_hash = hash;
+    return SR_ERR_OK;
 }
 
 static void
@@ -352,6 +383,66 @@ dm_feature_enable_internal(dm_ctx_t *dm_ctx, dm_schema_info_t *schema_info, cons
 }
 
 /**
+ *
+ * @brief Initializes module private data for newly added schema nodes.
+ * Most importantly computes hashes from their xpaths.
+ * Function assumes that the schema info is locked for writing or that it cannot be
+ * accessed by multiple threads at the same time.
+ *
+ * @param [in] schema_info
+ */
+static int
+dm_init_missing_node_priv_data(dm_schema_info_t *schema_info)
+{
+    int rc = SR_ERR_OK;
+    struct lys_node *node = NULL;
+    char *node_full_name = NULL;
+    bool backtracking = false;
+    uint32_t hash = 0;
+    CHECK_NULL_ARG(schema_info);
+
+    node = schema_info->module->data;
+
+    while (node) {
+        if (backtracking) {
+            if (node->next) {
+                node = node->next;
+                backtracking = false;
+            } else {
+                node = node->parent;
+                if (NULL != node && LYS_AUGMENT == node->nodetype) {
+                    node = ((struct lys_node_augment *)node)->target;
+                }
+            }
+        } else {
+            if (NULL == node->priv && sr_lys_data_node(node)) {
+                hash = dm_get_node_xpath_hash(sr_lys_node_get_data_parent(node, false));
+                node_full_name = calloc(strlen(LYS_MAIN_MODULE(node)->name) + strlen(node->name) + 2,
+                                        sizeof *node_full_name);
+                CHECK_NULL_NOMEM_RETURN(node_full_name);
+                strcat(node_full_name, LYS_MAIN_MODULE(node)->name);
+                strcat(node_full_name, ":");
+                strcat(node_full_name, node->name);
+                hash += sr_str_hash(node_full_name);
+                free(node_full_name);
+                node_full_name = NULL;
+                rc = dm_set_node_xpath_hash(node, hash);
+            }
+            if (SR_ERR_OK != rc) {
+                return rc;
+            }
+            if (!(node->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_ANYDATA)) && node->child) {
+                node = node->child;
+            } else {
+                backtracking = true;
+            }
+        }
+    }
+
+    return rc;
+}
+
+/**
  * @brief Edits module private data - enables all nodes
  *
  * @note Function expects that a schema info is locked for writing.
@@ -383,7 +474,7 @@ dm_enable_module_running_internal(dm_ctx_t *ctx, dm_session_t *session, dm_schem
                     break;
                 }
             }
- 
+
         }
     } else {
         SR_LOG_ERR("Module %s not found in provided context", module_name);
@@ -607,6 +698,10 @@ dm_load_module(dm_ctx_t *dm_ctx, const char *module_name, const char *revision, 
         ll_node = ll_node->next;
     }
 
+    /* compute xpath hashes for all schema nodes (referenced from data tree) */
+    rc = dm_init_missing_node_priv_data(si);
+    CHECK_RC_LOG_GOTO(rc, unlock, "Failed to initialize private data for module %s", module->name);
+
     /* apply persist data enable features, running datastore */
     if (module->has_persist) {
         rc = dm_apply_persist_data_for_model(dm_ctx, module_name, si);
@@ -622,7 +717,6 @@ dm_load_module(dm_ctx_t *dm_ctx, const char *module_name, const char *revision, 
         }
         ll_node = ll_node->next;
     }
-
 
     /* distinguish between modules that can and cannot be locked */
     si->can_not_be_locked = !module->has_data;
@@ -796,6 +890,7 @@ dm_free_sess_op(dm_sess_op_t *op)
     free(op->xpath);
     if (DM_SET_OP == op->op) {
         sr_free_val(op->detail.set.val);
+        free(op->detail.set.str_val);
     } else if (DM_MOVE_OP == op->op) {
         free(op->detail.mov.relative_item);
         op->detail.mov.relative_item = NULL;
@@ -1104,49 +1199,102 @@ dm_get_node_state(struct lys_node *node)
     return n_info->state;
 }
 
-int
-dm_add_operation(dm_session_t *session, dm_operation_t op, const char *xpath, sr_val_t *val, sr_edit_options_t opts, sr_move_position_t pos, const char *rel_item)
+uint32_t
+dm_get_node_xpath_hash(struct lys_node *node)
+{
+    if (NULL == node || NULL == node->priv) {
+        return 0;
+    }
+    dm_node_info_t *n_info = (dm_node_info_t *) node->priv;
+    return n_info->xpath_hash;
+}
+
+static int
+dm_alloc_operation(dm_session_t *session, dm_operation_t op, const char *xpath)
 {
     int rc = SR_ERR_OK;
-    CHECK_NULL_ARG_NORET2(rc, session, xpath); /* value can be NULL*/
-    if (SR_ERR_OK != rc) {
-        goto cleanup;
-    }
+    CHECK_NULL_ARG2(session, xpath);
 
     if (NULL == session->operations[session->datastore]) {
         session->oper_size[session->datastore] = 1;
         session->operations[session->datastore] = calloc(session->oper_size[session->datastore], sizeof(*session->operations[session->datastore]));
-        CHECK_NULL_NOMEM_GOTO(session->operations[session->datastore], rc, cleanup);
+        CHECK_NULL_NOMEM_RETURN(session->operations[session->datastore]);
     } else if (session->oper_count[session->datastore] == session->oper_size[session->datastore]) {
         session->oper_size[session->datastore] *= 2;
         dm_sess_op_t *tmp_op = realloc(session->operations[session->datastore], session->oper_size[session->datastore] * sizeof(*session->operations[session->datastore]));
-        CHECK_NULL_NOMEM_GOTO(tmp_op, rc, cleanup);
+        CHECK_NULL_NOMEM_RETURN(tmp_op);
         session->operations[session->datastore] = tmp_op;
     }
     int index = session->oper_count[session->datastore];
     session->operations[session->datastore][index].op = op;
     session->operations[session->datastore][index].has_error = false;
     session->operations[session->datastore][index].xpath = strdup(xpath);
-    CHECK_NULL_NOMEM_GOTO(session->operations[session->datastore][index].xpath, rc, cleanup);
-    if (DM_SET_OP == op) {
-        session->operations[session->datastore][index].detail.set.val = val;
-        session->operations[session->datastore][index].detail.set.options = opts;
-    } else if (DM_DELETE_OP == op) {
-        session->operations[session->datastore][index].detail.del.options = opts;
-    } else if (DM_MOVE_OP == op) {
-        session->operations[session->datastore][index].detail.mov.position = pos;
-        if (NULL != rel_item) {
-            session->operations[session->datastore][index].detail.mov.relative_item = strdup(rel_item);
-            CHECK_NULL_NOMEM_GOTO(session->operations[session->datastore][index].detail.mov.relative_item, rc, cleanup);
-        } else {
-            session->operations[session->datastore][index].detail.mov.relative_item = NULL;
-        }
+    CHECK_NULL_NOMEM_RETURN(session->operations[session->datastore][index].xpath);
+
+    return rc;
+}
+
+int
+dm_add_set_operation(dm_session_t *session, const char *xpath, sr_val_t *val, char *str_val, sr_edit_options_t opts)
+{
+    int rc = SR_ERR_OK;
+    CHECK_NULL_ARG_NORET2(rc, session, xpath); /* value, str_val can be NULL*/
+    if (SR_ERR_OK != rc) {
+        goto cleanup;
     }
+
+    rc = dm_alloc_operation(session, DM_SET_OP, xpath);
+    CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to allocate operation");
+
+    int index = session->oper_count[session->datastore];
+
+    session->operations[session->datastore][index].detail.set.val = val;
+    session->operations[session->datastore][index].detail.set.options = opts;
+    session->operations[session->datastore][index].detail.set.str_val = str_val;
 
     session->oper_count[session->datastore]++;
     return rc;
 cleanup:
     sr_free_val(val);
+    free(str_val);
+    return rc;
+}
+
+int
+dm_add_del_operation(dm_session_t *session, const char *xpath, sr_edit_options_t opts)
+{
+    int rc = SR_ERR_OK;
+    CHECK_NULL_ARG2(session, xpath);
+
+    rc = dm_alloc_operation(session, DM_DELETE_OP, xpath);
+    CHECK_RC_MSG_RETURN(rc, "Failed to allocate operation");
+
+    int index = session->oper_count[session->datastore];
+    session->operations[session->datastore][index].detail.del.options = opts;
+    session->oper_count[session->datastore]++;
+    return rc;
+}
+
+int
+dm_add_move_operation(dm_session_t *session, const char *xpath, sr_move_position_t pos, const char *rel_item)
+{
+    int rc = SR_ERR_OK;
+    CHECK_NULL_ARG2(session, xpath);
+
+    rc = dm_alloc_operation(session, DM_MOVE_OP, xpath);
+    CHECK_RC_MSG_RETURN(rc, "Failed to allocate operation");
+
+    int index = session->oper_count[session->datastore];
+
+    session->operations[session->datastore][index].detail.mov.position = pos;
+    if (NULL != rel_item) {
+        session->operations[session->datastore][index].detail.mov.relative_item = strdup(rel_item);
+        CHECK_NULL_NOMEM_RETURN(session->operations[session->datastore][index].detail.mov.relative_item);
+    } else {
+        session->operations[session->datastore][index].detail.mov.relative_item = NULL;
+    }
+
+    session->oper_count[session->datastore]++;
     return rc;
 }
 
@@ -1160,6 +1308,7 @@ dm_remove_last_operation(dm_session_t *session)
         dm_free_sess_op(&session->operations[session->datastore][index]);
         session->operations[session->datastore][index].xpath = NULL;
         session->operations[session->datastore][index].detail.set.val = NULL;
+        session->operations[session->datastore][index].detail.set.str_val = NULL;
     }
 }
 
@@ -1281,18 +1430,6 @@ dm_is_enabled_check_recursively(struct lys_node *node)
         node = node->parent;
     }
     return false;
-}
-
-int
-dm_set_node_state(struct lys_node *node, dm_node_state_t state)
-{
-    CHECK_NULL_ARG(node);
-    if (NULL == node->priv) {
-        node->priv = calloc(1, sizeof(dm_node_info_t));
-        CHECK_NULL_NOMEM_RETURN(node->priv);
-    }
-    ((dm_node_info_t *) node->priv)->state = state;
-    return SR_ERR_OK;
 }
 
 bool
@@ -1490,6 +1627,15 @@ dm_init(ac_ctx_t *ac_ctx, np_ctx_t *np_ctx, pm_ctx_t *pm_ctx, const cm_connectio
                  internal_data_search_dir, false, &ctx->md_ctx);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to initialize Module Dependencies context.");
 
+#ifdef ENABLE_NACM
+    if (CM_MODE_DAEMON == conn_mode) {
+        rc = nacm_init(ctx, ctx->data_search_dir, &ctx->nacm_ctx);
+        CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to initialize NACM context.");
+    } else {
+        SR_LOG_INF_MSG("Sysrepo is running in the local mode => NACM will be disabled.");
+    }
+#endif
+
     *dm_ctx = ctx;
 
 cleanup:
@@ -1507,8 +1653,8 @@ void
 dm_cleanup(dm_ctx_t *dm_ctx)
 {
     if (NULL != dm_ctx) {
+        nacm_cleanup(dm_ctx->nacm_ctx);
         sr_btree_cleanup(dm_ctx->commit_ctxs.tree);
-
         free(dm_ctx->schema_search_dir);
         free(dm_ctx->data_search_dir);
         free(dm_ctx->ds_lock);
@@ -1517,7 +1663,6 @@ dm_cleanup(dm_ctx_t *dm_ctx)
         pthread_rwlock_destroy(&dm_ctx->schema_tree_lock);
         sr_locking_set_cleanup(dm_ctx->locking_ctx);
         pthread_mutex_destroy(&dm_ctx->ds_lock_mutex);
-
         pthread_rwlock_destroy(&dm_ctx->commit_ctxs.lock);
         free(dm_ctx);
     }
@@ -3281,7 +3426,7 @@ dm_feature_enable(dm_ctx_t *dm_ctx, const char *module_name, const char *feature
     rc = md_get_module_info(dm_ctx->md_ctx, module_name, NULL, &module);
     CHECK_RC_LOG_GOTO(rc, cleanup, "Get module %s info failed", module_name);
 
-    /* load this module also into contexts of newly augmented modules */
+    /* enable feature in all modules augmented by this module */
     ll_node = module->inv_deps->first;
     while (ll_node) {
         dep = (md_dep_t *) ll_node->data;
@@ -3360,8 +3505,16 @@ dm_install_module(dm_ctx_t *dm_ctx, const char *module_name, const char *revisio
                 rc = dm_load_schema_file(dm_ctx, dep->dest->filepath, true, &si);
                 CHECK_RC_LOG_GOTO(rc, unlock, "Loading of %s was not successfull", dep->dest->name);
             }
+            if (dep->type == MD_DEP_DATA) {
+                /* mark this module as dependent on data from other modules */
+                si->cross_module_data_dependency = true;
+            }
             ll_node = ll_node->next;
         }
+
+        /* compute xpath hashes for all schema nodes (referenced from data tree) */
+        rc = dm_init_missing_node_priv_data(si);
+        CHECK_RC_LOG_GOTO(rc, unlock, "Failed to initialize private data for module %s", module->name);
 
         if (module->has_persist) {
             rc = dm_apply_persist_data_for_model(dm_ctx, module->name, si);
@@ -3378,6 +3531,9 @@ dm_install_module(dm_ctx_t *dm_ctx, const char *module_name, const char *revisio
             ll_node = ll_node->next;
         }
 
+        /* distinguish between modules that can and cannot be locked */
+        si->can_not_be_locked = !module->has_data;
+
         /* load this module also into contexts of newly augmented modules */
         ll_node = module->inv_deps->first;
         while (ll_node) {
@@ -3388,6 +3544,10 @@ dm_install_module(dm_ctx_t *dm_ctx, const char *module_name, const char *revisio
                 if (NULL != si_ext && NULL != si_ext->ly_ctx) {
                     rc = dm_load_schema_file(dm_ctx, module->filepath, true, &si_ext);
                     CHECK_RC_LOG_GOTO(rc, unlock, "Failed to load schema %s", module->filepath);
+
+                    /* compute xpath hashes for all newly added schema nodes (through augment) */
+                    rc = dm_init_missing_node_priv_data(si_ext);
+                    CHECK_RC_LOG_GOTO(rc, unlock, "Failed to initialize private data for module %s", dep->dest->name);
 
                     if (module->has_persist) {
                         rc = dm_apply_persist_data_for_model(dm_ctx, module->name, si_ext);
@@ -4359,7 +4519,7 @@ dm_validate_procedure(dm_ctx_t *dm_ctx, dm_session_t *session, dm_procedure_t ty
             /* copy argument value to string */
             string_value = NULL;
             if ((SR_CONTAINER_T != args[i].type) && (SR_LIST_T != args[i].type)) {
-                rc = sr_val_to_str(&args[i], arg_node, &string_value);
+                rc = sr_val_to_str_with_schema(&args[i], arg_node, &string_value);
                 if (SR_ERR_OK != rc) {
                     SR_LOG_ERR("Unable to convert %s argument value to string.", procedure_name);
                     rc = dm_report_error(session, "Unable to convert argument value to string", args[i].xpath,
@@ -4493,7 +4653,7 @@ dm_validate_procedure(dm_ctx_t *dm_ctx, dm_session_t *session, dm_procedure_t ty
                 strcat(tmp_xpath, "*");
                 nodeset = lyd_find_xpath(data_tree, tmp_xpath);
                 if (NULL != nodeset) {
-                    rc = sr_nodes_to_trees(nodeset, sr_mem, with_def_tree, with_def_tree_cnt);
+                    rc = sr_nodes_to_trees(nodeset, sr_mem, NULL, NULL, with_def_tree, with_def_tree_cnt);
                 } else {
                     SR_LOG_ERR("No matching nodes returned for xpath '%s'.", tmp_xpath);
                     rc = SR_ERR_INTERNAL;
@@ -4972,4 +5132,11 @@ dm_get_nodes_by_schema(dm_session_t *session, const char *module_name, const str
     }
 
     return rc;
+}
+
+int
+dm_get_nacm_ctx(dm_ctx_t *dm_ctx, nacm_ctx_t **nacm_ctx){
+    CHECK_NULL_ARG2(dm_ctx, nacm_ctx);
+    *nacm_ctx = dm_ctx->nacm_ctx;
+    return SR_ERR_OK;
 }

@@ -100,10 +100,21 @@ extern "C" {
 
 void throw_exception(int error);
 
+class sysrepo_exception : public std::runtime_error
+{
+public:
+    explicit sysrepo_exception(const sr_error_t error_code);
+    virtual ~sysrepo_exception() override;
+    sr_error_t error_code() const;
+private:
+    sr_error_t m_error_code;
+};
+
 class Logs
 {
 public:
     Logs();
+    ~Logs();
     void set_stderr(sr_log_level_t log_level);
     void set_syslog(sr_log_level_t log_level);
 };

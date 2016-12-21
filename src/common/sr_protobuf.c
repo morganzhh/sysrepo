@@ -57,6 +57,8 @@ sr_gpb_operation_name(Sr__Operation operation)
         return "get-subtree-chunk";
     case SR__OPERATION__SET_ITEM:
         return "set-item";
+    case SR__OPERATION__SET_ITEM_STR:
+        return "set-item-str";
     case SR__OPERATION__DELETE_ITEM:
         return "delete-item";
     case SR__OPERATION__MOVE_ITEM:
@@ -95,6 +97,8 @@ sr_gpb_operation_name(Sr__Operation operation)
         return "event-notification";
     case SR__OPERATION__OPER_DATA_TIMEOUT:
         return "oper-data-timeout";
+    case SR__OPERATION__INTERNAL_STATE_DATA:
+        return "internal-state-data";
     case _SR__OPERATION_IS_INT_SIZE:
         return "unknown";
     }
@@ -221,6 +225,12 @@ sr_gpb_req_alloc(sr_mem_ctx_t *sr_mem, const Sr__Operation operation, const uint
             CHECK_NULL_NOMEM_GOTO(sub_msg, rc, error);
             sr__set_item_req__init((Sr__SetItemReq*)sub_msg);
             req->set_item_req = (Sr__SetItemReq*)sub_msg;
+            break;
+        case SR__OPERATION__SET_ITEM_STR:
+            sub_msg = sr_calloc(sr_mem, 1, sizeof(Sr__SetItemStrReq));
+            CHECK_NULL_NOMEM_GOTO(sub_msg, rc, error);
+            sr__set_item_str_req__init((Sr__SetItemStrReq*)sub_msg);
+            req->set_item_str_req = (Sr__SetItemStrReq*)sub_msg;
             break;
         case SR__OPERATION__DELETE_ITEM:
             sub_msg = sr_calloc(sr_mem, 1, sizeof(Sr__DeleteItemReq));
@@ -459,6 +469,12 @@ sr_gpb_resp_alloc(sr_mem_ctx_t *sr_mem, const Sr__Operation operation, const uin
             CHECK_NULL_NOMEM_GOTO(sub_msg, rc, error);
             sr__set_item_resp__init((Sr__SetItemResp*)sub_msg);
             resp->set_item_resp = (Sr__SetItemResp*)sub_msg;
+            break;
+        case SR__OPERATION__SET_ITEM_STR:
+            sub_msg = sr_calloc(sr_mem, 1, sizeof(Sr__SetItemStrResp));
+            CHECK_NULL_NOMEM_GOTO(sub_msg, rc, error);
+            sr__set_item_str_resp__init((Sr__SetItemStrResp*)sub_msg);
+            resp->set_item_str_resp = (Sr__SetItemStrResp*)sub_msg;
             break;
         case SR__OPERATION__DELETE_ITEM:
             sub_msg = sr_calloc(sr_mem, 1, sizeof(Sr__DeleteItemResp));
@@ -764,6 +780,12 @@ sr_gpb_internal_req_alloc(sr_mem_ctx_t *sr_mem, const Sr__Operation operation, S
             sr__oper_data_timeout_req__init((Sr__OperDataTimeoutReq*)sub_msg);
             req->oper_data_timeout_req = (Sr__OperDataTimeoutReq*)sub_msg;
             break;
+        case SR__OPERATION__INTERNAL_STATE_DATA:
+            sub_msg = sr_calloc(sr_mem, 1, sizeof(Sr__InternalStateDataReq));
+            CHECK_NULL_NOMEM_GOTO(sub_msg, rc, error);
+            sr__internal_state_data_req__init((Sr__InternalStateDataReq*)sub_msg);
+            req->internal_state_data_req = (Sr__InternalStateDataReq*) sub_msg;
+            break;
         default:
             break;
     }
@@ -844,6 +866,9 @@ sr_gpb_msg_validate(const Sr__Msg *msg, const Sr__Msg__MsgType type, const Sr__O
                 break;
             case SR__OPERATION__SET_ITEM:
                 CHECK_NULL_RETURN(msg->request->set_item_req, SR_ERR_MALFORMED_MSG);
+                break;
+            case SR__OPERATION__SET_ITEM_STR:
+                CHECK_NULL_RETURN(msg->request->set_item_str_req, SR_ERR_MALFORMED_MSG);
                 break;
             case SR__OPERATION__DELETE_ITEM:
                 CHECK_NULL_RETURN(msg->request->delete_item_req, SR_ERR_MALFORMED_MSG);
@@ -945,6 +970,9 @@ sr_gpb_msg_validate(const Sr__Msg *msg, const Sr__Msg__MsgType type, const Sr__O
                 break;
             case SR__OPERATION__SET_ITEM:
                 CHECK_NULL_RETURN(msg->response->set_item_resp, SR_ERR_MALFORMED_MSG);
+                break;
+            case SR__OPERATION__SET_ITEM_STR:
+                CHECK_NULL_RETURN(msg->response->set_item_str_resp, SR_ERR_MALFORMED_MSG);
                 break;
             case SR__OPERATION__DELETE_ITEM:
                 CHECK_NULL_RETURN(msg->response->delete_item_resp, SR_ERR_MALFORMED_MSG);
@@ -1106,6 +1134,12 @@ sr_set_val_t_type_in_gpb(const sr_val_t *value, Sr__Value *gpb_value){
     case SR_UINT64_T:
         gpb_value->type = SR__VALUE__TYPES__UINT64;
         break;
+    case SR_ANYXML_T:
+        gpb_value->type = SR__VALUE__TYPES__ANYXML;
+        break;
+    case SR_ANYDATA_T:
+        gpb_value->type = SR__VALUE__TYPES__ANYDATA;
+        break;
 
     default:
         SR_LOG_ERR("Type can not be mapped to gpb type '%s' type %d", value->xpath, value->type);
@@ -1142,7 +1176,7 @@ sr_set_val_t_value_in_gpb(const sr_val_t *value, Sr__Value *gpb_value){
     case SR_BINARY_T:
         if (value->_sr_mem) {
             gpb_value->binary_val = value->data.binary_val;
-        } else {
+        } else if (NULL != value->data.binary_val) {
             gpb_value->binary_val = strdup(value->data.binary_val);
             CHECK_NULL_NOMEM_RETURN(gpb_value->binary_val);
         }
@@ -1150,7 +1184,7 @@ sr_set_val_t_value_in_gpb(const sr_val_t *value, Sr__Value *gpb_value){
     case SR_BITS_T:
         if (value->_sr_mem) {
             gpb_value->bits_val = value->data.bits_val;
-        } else {
+        } else if (NULL != value->data.bits_val) {
             gpb_value->bits_val = strdup(value->data.bits_val);
             CHECK_NULL_NOMEM_RETURN(gpb_value->bits_val);
         }
@@ -1166,7 +1200,7 @@ sr_set_val_t_value_in_gpb(const sr_val_t *value, Sr__Value *gpb_value){
     case SR_ENUM_T:
         if (value->_sr_mem) {
             gpb_value->enum_val = value->data.enum_val;
-        } else {
+        } else if (NULL != value->data.enum_val) {
             gpb_value->enum_val = strdup(value->data.enum_val);
             CHECK_NULL_NOMEM_RETURN(gpb_value->enum_val);
         }
@@ -1174,7 +1208,7 @@ sr_set_val_t_value_in_gpb(const sr_val_t *value, Sr__Value *gpb_value){
     case SR_IDENTITYREF_T:
         if (value->_sr_mem) {
             gpb_value->identityref_val = value->data.identityref_val;
-        } else {
+        } else if (NULL != value->data.identityref_val) {
             gpb_value->identityref_val = strdup(value->data.identityref_val);
             CHECK_NULL_NOMEM_RETURN(gpb_value->identityref_val);
         }
@@ -1182,7 +1216,7 @@ sr_set_val_t_value_in_gpb(const sr_val_t *value, Sr__Value *gpb_value){
     case SR_INSTANCEID_T:
         if (value->_sr_mem) {
             gpb_value->instanceid_val = value->data.instanceid_val;
-        } else {
+        } else if (NULL != value->data.instanceid_val) {
             gpb_value->instanceid_val = strdup(value->data.instanceid_val);
             CHECK_NULL_NOMEM_RETURN(gpb_value->instanceid_val);
         }
@@ -1206,7 +1240,7 @@ sr_set_val_t_value_in_gpb(const sr_val_t *value, Sr__Value *gpb_value){
     case SR_STRING_T:
         if (value->_sr_mem) {
             gpb_value->string_val = value->data.string_val;
-        } else {
+        } else if (NULL != value->data.string_val) {
             gpb_value->string_val = strdup(value->data.string_val);
             CHECK_NULL_NOMEM_RETURN(gpb_value->string_val);
         }
@@ -1227,6 +1261,22 @@ sr_set_val_t_value_in_gpb(const sr_val_t *value, Sr__Value *gpb_value){
         gpb_value->uint64_val = value->data.uint64_val;
         gpb_value->has_uint64_val = true;
         break;
+    case SR_ANYXML_T:
+        if (value->_sr_mem) {
+            gpb_value->anyxml_val = value->data.anyxml_val;
+        } else if (NULL != value->data.anyxml_val) {
+            gpb_value->anyxml_val = strdup(value->data.anyxml_val);
+            CHECK_NULL_NOMEM_RETURN(gpb_value->anyxml_val);
+        }
+        return SR_ERR_OK;
+    case SR_ANYDATA_T:
+        if (value->_sr_mem) {
+            gpb_value->anydata_val = value->data.anydata_val;
+        } else if (NULL != value->data.anydata_val) {
+            gpb_value->anydata_val = strdup(value->data.anydata_val);
+            CHECK_NULL_NOMEM_RETURN(gpb_value->anydata_val);
+        }
+        return SR_ERR_OK;
     default:
         SR_LOG_ERR("Conversion of value type not supported '%s'", value->xpath);
         return SR_ERR_INTERNAL;
@@ -1335,6 +1385,12 @@ sr_set_gpb_type_in_val_t(const Sr__Value *gpb_value, sr_val_t *value){
     case SR__VALUE__TYPES__UINT64:
         value->type = SR_UINT64_T;
         break;
+    case SR__VALUE__TYPES__ANYXML:
+        value->type = SR_ANYXML_T;
+        break;
+    case SR__VALUE__TYPES__ANYDATA:
+        value->type = SR_ANYDATA_T;
+        break;
     default:
         SR_LOG_ERR_MSG("Type can not be mapped to sr_val_t");
         return SR_ERR_INTERNAL;
@@ -1442,6 +1498,22 @@ sr_set_gpb_value_in_val_t(const Sr__Value *gpb_value, sr_val_t *value){
         return SR_ERR_OK;
     case SR__VALUE__TYPES__UINT64:
         value->data.uint64_val = gpb_value->uint64_val;
+        return SR_ERR_OK;
+    case SR__VALUE__TYPES__ANYXML:
+        if (value->_sr_mem) {
+            value->data.anyxml_val = gpb_value->anyxml_val;
+        } else {
+            value->data.anyxml_val = strdup(gpb_value->anyxml_val);
+            CHECK_NULL_NOMEM_RETURN(gpb_value->anyxml_val);
+        }
+        return SR_ERR_OK;
+    case SR__VALUE__TYPES__ANYDATA:
+        if (value->_sr_mem) {
+            value->data.anydata_val = gpb_value->anydata_val;
+        } else {
+            value->data.anydata_val = strdup(gpb_value->anydata_val);
+            CHECK_NULL_NOMEM_RETURN(gpb_value->anydata_val);
+        }
         return SR_ERR_OK;
     default:
         SR_LOG_ERR_MSG("Copy of value failed");
@@ -2046,6 +2118,7 @@ sr_subsciption_type_str_to_gpb(const char *type_name)
     if (0 == strcmp(type_name, "dp-get-items")) {
         return SR__SUBSCRIPTION_TYPE__DP_GET_ITEMS_SUBS;
     }
+    SR_LOG_ERR("Unknown type %s can not be converted", type_name);
     return _SR__SUBSCRIPTION_TYPE_IS_INT_SIZE;
 }
 

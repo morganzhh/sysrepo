@@ -38,6 +38,7 @@
 #include "persistence_manager.h"
 #include "connection_manager.h"
 #include "module_dependencies.h"
+#include "nacm.h"
 
 /**
  * @brief number of supported data stores - length of arrays used in session
@@ -132,6 +133,7 @@ typedef struct dm_sess_op_s{
     union {
         struct set{
             sr_val_t *val;              /**< Value to perform operation with, can be NULL*/
+            char *str_val;              /**< Alternatively value in string form */
             sr_edit_options_t options;  /**< Operation edit options */
         } set;
         struct del{
@@ -473,7 +475,11 @@ int dm_save_commit_context(dm_ctx_t *dm_ctx, dm_commit_context_t *c_ctx);
  * @param [in] rel_item - option of move operation
  * @return Error code (SR_ERR_OK on success)
  */
-int dm_add_operation(dm_session_t *session, dm_operation_t op, const char *xpath, sr_val_t *val, sr_edit_options_t opts, sr_move_position_t pos, const char *rel_item);
+int dm_add_set_operation(dm_session_t *session, const char *xpath, sr_val_t *val, char *str_val, sr_edit_options_t opts);
+
+int dm_add_del_operation(dm_session_t *session, const char *xpath, sr_edit_options_t opts);
+
+int dm_add_move_operation(dm_session_t *session, const char *xpath, sr_move_position_t pos, const char *rel_item);
 
 /**
  * @brief Removes last logged operation in session
@@ -561,6 +567,12 @@ bool dm_is_node_enabled_with_children(struct lys_node* node);
  * @return True if the node is enabled. It might be enabled directly or one any of his parent is in state DM_NODE_ENABLED_WITH_CHILDREN.
  */
 bool dm_is_enabled_check_recursively(struct lys_node *node);
+
+/**
+ * @brief Returns the hash of a schema node xpath identifier.
+ * If NULL is provided as the argument then 0 is returned.
+ */
+uint32_t dm_get_node_xpath_hash(struct lys_node *node);
 
 /**
  * @brief Sets the state of the node.
@@ -1036,6 +1048,16 @@ int dm_lock_schema_info_write(dm_schema_info_t *schema_info);
  * @return Error code (SR_ERR_OK on success)
  */
 int dm_get_nodes_by_schema(dm_session_t *session, const char *module_name, const struct lys_node *node, struct ly_set **res);
+
+/**
+ * @brief Returns and instance of NACM context
+ * @param [in] dm_ctx
+ * @param [out] nacm_ctx
+ *
+ * @return Error code (SR_ERR_OK on success)
+ *
+ */
+int dm_get_nacm_ctx(dm_ctx_t *dm_ctx, nacm_ctx_t **nacm_ctx);
 
 /**@} Data manager*/
 #endif /* SRC_DATA_MANAGER_H_ */

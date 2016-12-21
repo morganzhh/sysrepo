@@ -109,6 +109,8 @@ typedef enum sr_type_e {
     SR_UINT16_T,       /**< 16-bit unsigned integer ([RFC 6020 sec 9.2](http://tools.ietf.org/html/rfc6020#section-9.2)) */
     SR_UINT32_T,       /**< 32-bit unsigned integer ([RFC 6020 sec 9.2](http://tools.ietf.org/html/rfc6020#section-9.2)) */
     SR_UINT64_T,       /**< 64-bit unsigned integer ([RFC 6020 sec 9.2](http://tools.ietf.org/html/rfc6020#section-9.2)) */
+    SR_ANYXML_T,       /**< Unknown chunk of XML ([RFC 6020 sec 7.10](https://tools.ietf.org/html/rfc6020#section-7.10)) */
+    SR_ANYDATA_T,      /**< Unknown set of nodes, encoded in XML ([RFC 7950 sec 7.10](https://tools.ietf.org/html/rfc7950#section-7.10)) */
 } sr_type_t;
 
 /**
@@ -131,6 +133,8 @@ typedef union sr_data_u {
     uint16_t uint16_val;    /**< 16-bit unsigned integer ([RFC 6020 sec 9.2](http://tools.ietf.org/html/rfc6020#section-9.2)) */
     uint32_t uint32_val;    /**< 32-bit unsigned integer ([RFC 6020 sec 9.2](http://tools.ietf.org/html/rfc6020#section-9.2)) */
     uint64_t uint64_val;    /**< 64-bit unsigned integer ([RFC 6020 sec 9.2](http://tools.ietf.org/html/rfc6020#section-9.2)) */
+    char *anyxml_val;       /**< Unknown chunk of XML ([RFC 6020 sec 7.10](https://tools.ietf.org/html/rfc6020#section-7.10)) */
+    char *anydata_val;      /**< Unknown set of nodes, encoded in XML ([RFC 7950 sec 7.10](https://tools.ietf.org/html/rfc7950#section-7.10)) */
 } sr_data_t;
 
 /**
@@ -885,6 +889,17 @@ typedef enum sr_move_position_e {
  */
 int sr_set_item(sr_session_ctx_t *session, const char *xpath, const sr_val_t *value, const sr_edit_options_t opts);
 
+
+/**
+ * @brief Functions is similar to ::sr_set_item with the difference that the value to be set
+ * is provided as string.
+ * @param [in] session Session context acquired with ::sr_session_start call.
+ * @param [in] xpath @ref xp_page "XPath" identifier of the data element to be set.
+ * @param [in] value string representation of the value to be set
+ * @param [in] opts same as for ::sr_set_item
+ * @return Error code (SR_ERR_OK on success).
+ */
+int sr_set_item_str(sr_session_ctx_t *session, const char *xpath, const char *value, const sr_edit_options_t opts);
 /**
  * @brief Deletes the nodes under the specified xpath.
  *

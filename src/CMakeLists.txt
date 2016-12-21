@@ -67,10 +67,12 @@ set(SYSREPO_ENGINE_SOURCES
     rp_dt_lookup.c
     rp_dt_get.c
     rp_dt_edit.c
+    rp_dt_filter.c
     data_manager.c
     notification_processor.c
     persistence_manager.c
     module_dependencies.c
+    nacm.c
 )
 
 add_library(COMMON OBJECT ${COMMON_SOURCES})

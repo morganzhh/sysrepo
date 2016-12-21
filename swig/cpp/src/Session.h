@@ -46,7 +46,7 @@ class Session
 public:
     Session(S_Connection conn, sr_datastore_t datastore = static_cast<sr_datastore_t>( DS_RUNNING ), \
             const sr_sess_options_t opts = SESS_DEFAULT, const char *user_name = NULL);
-    Session(sr_session_ctx_t *sess, sr_sess_options_t opts = SESS_DEFAULT);
+    Session(sr_session_ctx_t *sess, sr_sess_options_t opts = SESS_DEFAULT, S_Deleter deleter = NULL);
     void session_stop();
     void session_switch_ds(sr_datastore_t ds);
     S_Error get_last_error();
@@ -78,14 +78,19 @@ public:
     void discard_changes();
     void copy_config(const char *module_name, sr_datastore_t src_datastore, sr_datastore_t dst_datastore);
     void set_options(const sr_sess_options_t opts);
+    S_Iter_Change get_changes_iter(const char *xpath);
+    S_Change get_change_next(S_Iter_Change iter);
     ~Session();
     sr_session_ctx_t *get() {return _sess;};
+
+    friend class Subscribe;
 
 private:
     sr_session_ctx_t *_sess;
     sr_datastore_t _datastore;
     sr_sess_options_t _opts;
     S_Connection _conn;
+    S_Deleter _deleter;
 };
 
 class Callback
@@ -101,7 +106,7 @@ public:
     virtual int rpc(const char *, S_Vals , S_Vals_Holder , void *) {return SR_ERR_OK;};
     virtual int action(const char *, S_Vals , S_Vals_Holder , void *) {return SR_ERR_OK;};
     virtual int rpc_tree(const char *, S_Trees , S_Trees_Holder , void *) {return SR_ERR_OK;};
-    virtual void action_tree(const char *, S_Trees , S_Trees_Holder , void *) {return;};
+    virtual int action_tree(const char *, S_Trees , S_Trees_Holder , void *) {return SR_ERR_OK;};
     virtual int dp_get_items(const char *, S_Vals_Holder , void *) {return SR_ERR_OK;};
     virtual void event_notif(const char *, S_Vals , time_t , void *) {return;};
     virtual void event_notif_tree(const char *, S_Trees , time_t , void *) {return;};
@@ -131,8 +136,6 @@ public:
     std::vector<S_Callback > cb_list;
 
     void unsubscribe();
-    S_Iter_Change get_changes_iter(const char *xpath);
-    S_Change get_change_next(S_Iter_Change iter);
     S_Vals rpc_send(const char *xpath, S_Vals input);
     S_Vals action_send(const char *xpath, S_Vals input);
     S_Trees rpc_send_tree(const char *xpath, S_Trees input);

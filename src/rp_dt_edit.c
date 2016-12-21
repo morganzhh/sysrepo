@@ -153,7 +153,9 @@ rp_dt_contains_non_default_node(struct ly_set *nodes)
         if ((LYS_LEAFLIST | LYS_LIST) & nodes->set.d[i]->schema->nodetype ||
             (LYS_CONTAINER == nodes->set.d[i]->schema->nodetype &&
                  NULL != ((struct lys_node_container *) nodes->set.d[i]->schema)->presence) ||
-            (LYS_LEAF == nodes->set.d[i]->schema->nodetype && !nodes->set.d[i]->dflt)) {
+            (LYS_LEAF == nodes->set.d[i]->schema->nodetype && !nodes->set.d[i]->dflt) ||
+            (LYS_ANYXML == nodes->set.d[i]->schema->nodetype && !nodes->set.d[i]->dflt) ||
+            (LYS_ANYDATA == nodes->set.d[i]->schema->nodetype && !nodes->set.d[i]->dflt)) {
             return true;
         } else if (LYS_CONTAINER == nodes->set.d[i]->schema->nodetype) {
             struct lyd_node *next = NULL, *iter = NULL;
@@ -304,7 +306,7 @@ cleanup:
 }
 
 int
-rp_dt_set_item(dm_ctx_t *dm_ctx, dm_session_t *session, const char *xpath, const sr_edit_flag_t options, const sr_val_t *value)
+rp_dt_set_item(dm_ctx_t *dm_ctx, dm_session_t *session, const char *xpath, const sr_edit_flag_t options, const sr_val_t *value, const char *str_val)
 {
     CHECK_NULL_ARG3(dm_ctx, session, xpath);
     /* value can be NULL if the list is created */
@@ -369,8 +371,11 @@ rp_dt_set_item(dm_ctx_t *dm_ctx, dm_session_t *session, const char *xpath, const
 
     /* transform new value from sr_val_t to string */
     if (NULL != value) {
-        rc = sr_val_to_str(value, sch_node, &new_value);
+        rc = sr_val_to_str_with_schema(value, sch_node, &new_value);
         CHECK_RC_MSG_RETURN(rc, "Copy new value to string failed");
+    } else if (NULL != str_val) {
+        new_value = strdup(str_val);
+        CHECK_NULL_NOMEM_RETURN(new_value);
     } else if (!((LYS_CONTAINER | LYS_LIST) & sch_node->nodetype) &&
             !(LYS_LEAFLIST == sch_node->nodetype && NULL != strstr(xpath, "[.='") && ']' == xpath[strlen(xpath)-1])) {
         /* value can be NULL only if a presence container, list or leaf-list with predicated is being created */
@@ -543,7 +548,7 @@ rp_dt_move_list_wrapper(rp_ctx_t *rp_ctx, rp_session_t *session, const char *xpa
     rc = ac_check_node_permissions(session->ac_session, xpath, AC_OPER_READ_WRITE);
     CHECK_RC_LOG_RETURN(rc, "Access control check failed for xpath '%s'", xpath);
 
-    rc = dm_add_operation(session->dm_session, DM_MOVE_OP, xpath, NULL, 0, position, relative_item);
+    rc = dm_add_move_operation(session->dm_session, xpath, position, relative_item);
     CHECK_RC_MSG_RETURN(rc, "Adding operation to session op list failed");
 
     rc = rp_dt_move_list(rp_ctx->dm_ctx, session->dm_session, xpath, position, relative_item);
@@ -556,7 +561,7 @@ rp_dt_move_list_wrapper(rp_ctx_t *rp_ctx, rp_session_t *session, const char *xpa
 }
 
 int
-rp_dt_set_item_wrapper(rp_ctx_t *rp_ctx, rp_session_t *session, const char *xpath, sr_val_t *val, sr_edit_options_t opt)
+rp_dt_set_item_wrapper(rp_ctx_t *rp_ctx, rp_session_t *session, const char *xpath, sr_val_t *val, char *str_val, sr_edit_options_t opt)
 {
     CHECK_NULL_ARG5(rp_ctx, rp_ctx->dm_ctx, session, session->dm_session, xpath);
 
@@ -568,14 +573,15 @@ rp_dt_set_item_wrapper(rp_ctx_t *rp_ctx, rp_session_t *session, const char *xpat
     if (SR_ERR_OK != rc) {
         SR_LOG_ERR("Access control check failed for xpath '%s'", xpath);
         sr_free_val(val);
+        free(str_val);
         return rc;
     }
 
-    rc = dm_add_operation(session->dm_session, DM_SET_OP, xpath, val, opt, 0, NULL);
-    /* val is freed by dm_add_operation */
+    rc = dm_add_set_operation(session->dm_session, xpath, val, str_val, opt);
+    /* val and str_val is freed by dm_add_operation */
     CHECK_RC_MSG_RETURN(rc, "Adding operation to session op list failed");
 
-    rc = rp_dt_set_item(rp_ctx->dm_ctx, session->dm_session, xpath, opt, val);
+    rc = rp_dt_set_item(rp_ctx->dm_ctx, session->dm_session, xpath, opt, val, str_val);
     if (SR_ERR_OK != rc) {
         SR_LOG_ERR_MSG("Set item failed");
         dm_remove_last_operation(session->dm_session);
@@ -594,7 +600,7 @@ rp_dt_delete_item_wrapper(rp_ctx_t *rp_ctx, rp_session_t *session, const char *x
     rc = ac_check_node_permissions(session->ac_session, xpath, AC_OPER_READ_WRITE);
     CHECK_RC_LOG_RETURN(rc, "Access control check failed for xpath '%s'", xpath);
 
-    rc = dm_add_operation(session->dm_session, DM_DELETE_OP, xpath, NULL, opts, 0, NULL);
+    rc = dm_add_del_operation(session->dm_session, xpath, opts);
     CHECK_RC_MSG_RETURN(rc, "Adding operation to session op list failed");
 
     rc = rp_dt_delete_item(rp_ctx->dm_ctx, session->dm_session, xpath, opts);
@@ -646,7 +652,7 @@ rp_dt_replay_operations(dm_ctx_t *ctx, dm_session_t *session, dm_sess_op_t *oper
 
         switch (op->op) {
         case DM_SET_OP:
-            rc = rp_dt_set_item(ctx, session, op->xpath, op->detail.set.options, op->detail.set.val);
+            rc = rp_dt_set_item(ctx, session, op->xpath, op->detail.set.options, op->detail.set.val, op->detail.set.str_val);
             break;
         case DM_DELETE_OP:
             rc = rp_dt_delete_item(ctx, session, op->xpath, op->detail.del.options);

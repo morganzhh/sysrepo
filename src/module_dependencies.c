@@ -56,10 +56,6 @@
 /* Initial allocated size of an array */
 #define MD_INIT_ARRAY_SIZE  8
 
-/* Return main module of a libyang's scheme element. */
-#define MD_MAIN_MODULE(lys_elem)  \
-            (lys_elem->module->type ? ((struct lys_submodule *)lys_elem->module)->belongsto : lys_elem->module)
-
 /**
  * @brief Return file path of the internal data file with module dependencies.
  *
@@ -313,28 +309,6 @@ md_compare_modules(const void *module1_ptr, const void *module2_ptr)
 }
 
 /**
- * @brief Get the real parent of a schema node, skipping AUGMENTs and USEs.
- */
-static struct lys_node *
-md_node_get_real_parent(struct lys_node *node, bool skip_uses, bool skip_augment)
-{
-    node = node ? node->parent : NULL;
-
-    while (node &&
-            (((LYS_AUGMENT == node->nodetype) && skip_augment) ||
-             ((LYS_USES == node->nodetype) && skip_uses))) {
-        if (LYS_AUGMENT == node->nodetype) {
-            node = ((struct lys_node_augment *)node)->target;
-        } else {
-            /* LYS_USES */
-            node = node->parent;
-        }
-    }
-
-    return node;
-}
-
-/**
  * @brief Construct a sort of XPath referencing a given scheme node (exclude keys).
  * Returned xpath is allocated on the heap and should be eventually freed.
  */
@@ -357,10 +331,10 @@ md_construct_lys_xpath(const struct lys_node *node_schema, char **xpath)
         cur_schema = ((struct lys_node_augment *)cur_schema)->target;
     }
     while (NULL != cur_schema) {
-        parent_schema = md_node_get_real_parent((struct lys_node *)cur_schema, true, true);
+        parent_schema = sr_lys_node_get_data_parent((struct lys_node *)cur_schema, false);
         length += 1 /* "/" */;
-        if (!parent_schema || 0 != strcmp(MD_MAIN_MODULE(parent_schema)->name, MD_MAIN_MODULE(cur_schema)->name)) {
-            length += strlen(MD_MAIN_MODULE(cur_schema)->name) + 1 /* ":" */;
+        if (!parent_schema || 0 != strcmp(LYS_MAIN_MODULE(parent_schema)->name, LYS_MAIN_MODULE(cur_schema)->name)) {
+            length += strlen(LYS_MAIN_MODULE(cur_schema)->name) + 1 /* ":" */;
         }
         length += strlen(cur_schema->name);
         cur_schema = parent_schema;
@@ -376,19 +350,19 @@ md_construct_lys_xpath(const struct lys_node *node_schema, char **xpath)
     }
     while (NULL != cur_schema) {
         /* parent */
-        parent_schema = md_node_get_real_parent((struct lys_node *)cur_schema, true, true);
+        parent_schema = sr_lys_node_get_data_parent((struct lys_node *)cur_schema, false);
         /* node name */
         length = strlen(cur_schema->name);
         cur -= length;
         memcpy(cur, cur_schema->name, length);
-        if (!parent_schema || 0 != strcmp(MD_MAIN_MODULE(parent_schema)->name, MD_MAIN_MODULE(cur_schema)->name)) {
+        if (!parent_schema || 0 != strcmp(LYS_MAIN_MODULE(parent_schema)->name, LYS_MAIN_MODULE(cur_schema)->name)) {
             /* separator */
             cur -= 1;
             *cur = ':';
             /* module */
-            length = strlen(MD_MAIN_MODULE(cur_schema)->name);
+            length = strlen(LYS_MAIN_MODULE(cur_schema)->name);
             cur -= length;
-            memcpy(cur, MD_MAIN_MODULE(cur_schema)->name, length);
+            memcpy(cur, LYS_MAIN_MODULE(cur_schema)->name, length);
         }
         /* separator */
         cur -= 1;
@@ -495,15 +469,15 @@ md_get_destination_module(md_ctx_t *md_ctx, md_module_t *module, const struct ly
     }
 
     do {
-        parent = md_node_get_real_parent((struct lys_node *)node, true, true);
+        parent = sr_lys_node_get_data_parent((struct lys_node *)node, false);
         if (parent) {
             node = parent;
         }
     } while (parent);
 
     md_module_t module_lkp;
-    module_lkp.name = (char *)MD_MAIN_MODULE(node)->name;
-    module_lkp.revision_date = (char *)md_get_module_revision(MD_MAIN_MODULE(node));
+    module_lkp.name = (char *)LYS_MAIN_MODULE(node)->name;
+    module_lkp.revision_date = (char *)md_get_module_revision(LYS_MAIN_MODULE(node));
 
     if (NULL != module && NULL != module->name && 0 == strcmp(module_lkp.name, module->name) &&
         0 == strcmp(module_lkp.revision_date, module->revision_date)) {
@@ -845,6 +819,42 @@ md_remove_all_subtree_refs(md_ctx_t *md_ctx, md_module_t *orig_module, sr_llist_
         }
         subtree_ref_data = next_node;
     }
+}
+
+/**
+ * @brief Check if the given state data subtree is already recorded.
+ * @return SR_ERR_DATA_EXISTS if it is already recorded, SR_ERR_NOT_FOUND if this state data subtree
+ * is not yet known, and different error code in case of an actual runtime error.
+ */
+static int
+md_check_op_data_subtree(md_module_t *module, const struct lys_node *root)
+{
+    int rc = SR_ERR_OK;
+    char *root_xpath = NULL;
+    md_subtree_ref_t *subtree_ref = NULL;
+    sr_llist_node_t *item = NULL;
+    CHECK_NULL_ARG2(module, root);
+
+    rc = md_construct_lys_xpath(root, &root_xpath);
+    CHECK_RC_MSG_RETURN(rc, "Failed to construct XPath to a subtree.");
+
+    item = module->op_data_subtrees->first;
+    while (item) {
+        subtree_ref = (md_subtree_ref_t *)item->data;
+        if (sr_str_begins_with(root_xpath, subtree_ref->xpath)) {
+            char term = root_xpath[strlen(subtree_ref->xpath)];
+            if ('\0' == term || '/' == term) {
+                rc = SR_ERR_DATA_EXISTS;
+                goto cleanup;
+            }
+        }
+        item = item->next;
+    }
+
+    rc = SR_ERR_NOT_FOUND;
+cleanup:
+    free(root_xpath);
+    return rc;
 }
 
 /**
@@ -1380,7 +1390,7 @@ md_traverse_schema_tree(md_ctx_t *md_ctx, md_module_t *module, struct lys_node *
         return SR_ERR_OK;
     }
 
-    main_module_schema = MD_MAIN_MODULE(root);
+    main_module_schema = LYS_MAIN_MODULE(root);
     dest_module = (augment ? md_get_destination_module(md_ctx, module, root) : module);
     if (NULL == dest_module) {
         /* shouldn't happen as all imports are already processed */
@@ -1400,7 +1410,7 @@ md_traverse_schema_tree(md_ctx_t *md_ctx, md_module_t *module, struct lys_node *
             /* go as deep as possible */
             if (process_children) {
                 while (!(node->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_ANYXML)) && node->child
-                       && MD_MAIN_MODULE(node->child) == main_module_schema) {
+                       && LYS_MAIN_MODULE(node->child) == main_module_schema) {
                     node = node->child;
                 }
             }
@@ -1613,8 +1623,16 @@ md_traverse_schema_tree(md_ctx_t *md_ctx, md_module_t *module, struct lys_node *
             } else if (LYS_CONFIG_R & node->flags) {
                 /*< this node has operational data (and all descendands as well) */
                 if (NULL == node->parent) {
-                    rc = md_add_subtree_ref(md_ctx, dest_module, dest_module->op_data_subtrees, module, node,
-                                            MD_XPATH_MODULE_OP_DATA_SUBTREE);
+                    rc = SR_ERR_NOT_FOUND;
+                    if (augment) {
+                        rc = md_check_op_data_subtree(dest_module, node);
+                    }
+                    if (SR_ERR_DATA_EXISTS == rc) {
+                        rc = SR_ERR_OK;
+                    } else if (SR_ERR_NOT_FOUND == rc) {
+                        rc = md_add_subtree_ref(md_ctx, dest_module, dest_module->op_data_subtrees, module, node,
+                                                MD_XPATH_MODULE_OP_DATA_SUBTREE);
+                    }
                 } /*< otherwise leave for the parent to decide */
             } else { /*< this node has configuration data or it is a special kind of node (e.g. augment) */
                 if ((intptr_t)node->priv & PRIV_OP_SUBTREE) {
@@ -1623,12 +1641,20 @@ md_traverse_schema_tree(md_ctx_t *md_ctx, md_module_t *module, struct lys_node *
                         /* a mix of configuration and operational data amongst children */
                         backtracking = false;
                         child = node->child;
-                        while ((NULL != child) && (main_module_schema == MD_MAIN_MODULE(child)) && (child != node)) {
+                        while ((NULL != child) && (main_module_schema == LYS_MAIN_MODULE(child)) && (child != node)) {
                             assert(!backtracking || (LYS_USES == child->nodetype));
                             if ((LYS_USES != child->nodetype) && (LYS_CONFIG_R & child->flags)) {
                                 /* child with state data */
-                                rc = md_add_subtree_ref(md_ctx, dest_module, dest_module->op_data_subtrees, module,
-                                        child, MD_XPATH_MODULE_OP_DATA_SUBTREE);
+                                rc = SR_ERR_NOT_FOUND;
+                                if (augment) {
+                                    rc = md_check_op_data_subtree(dest_module, child);
+                                }
+                                if (SR_ERR_DATA_EXISTS == rc) {
+                                    rc = SR_ERR_OK;
+                                } else if (SR_ERR_NOT_FOUND == rc) {
+                                    rc = md_add_subtree_ref(md_ctx, dest_module, dest_module->op_data_subtrees, module,
+                                            child, MD_XPATH_MODULE_OP_DATA_SUBTREE);
+                                }
                                 if (SR_ERR_OK != rc) {
                                     break;
                                 }
@@ -1646,14 +1672,22 @@ md_traverse_schema_tree(md_ctx_t *md_ctx, md_module_t *module, struct lys_node *
                         }
                     } else {
                         /* all children carry operational data */
-                        rc = md_add_subtree_ref(md_ctx, dest_module, dest_module->op_data_subtrees, module, node,
-                                                MD_XPATH_MODULE_OP_DATA_SUBTREE);
+                        rc = SR_ERR_NOT_FOUND;
+                        if (augment) {
+                            rc = md_check_op_data_subtree(dest_module, node);
+                        }
+                        if (SR_ERR_DATA_EXISTS == rc) {
+                            rc = SR_ERR_OK;
+                        } else if (SR_ERR_NOT_FOUND == rc) {
+                            rc = md_add_subtree_ref(md_ctx, dest_module, dest_module->op_data_subtrees, module, node,
+                                                    MD_XPATH_MODULE_OP_DATA_SUBTREE);
+                        }
                     }
                 }
             }
             CHECK_RC_MSG_RETURN(rc, "Failed to add operational data subtree reference into the dependency info.");
             /* pass some feedback to the parent node */
-            parent = md_node_get_real_parent(node, true, false);
+            parent = sr_lys_node_get_data_parent(node, true);
             if ((LYS_CONFIG_R & node->flags) && parent) {
                 parent->priv = (void *)((intptr_t)parent->priv | PRIV_OP_SUBTREE);
             }
@@ -1663,7 +1697,7 @@ md_traverse_schema_tree(md_ctx_t *md_ctx, md_module_t *module, struct lys_node *
 next_node:
             /* backtracking + automatically moving to the next sibling if there is any */
             if (node != root) {
-                if (node->next && main_module_schema == MD_MAIN_MODULE(node->next)) {
+                if (node->next && main_module_schema == LYS_MAIN_MODULE(node->next)) {
                     node = node->next;
                     process_children = true;
                 } else {
@@ -1675,7 +1709,7 @@ next_node:
                 break;
             }
         } while (node);
-    } while (!augment && NULL != (root = root->next) && MD_MAIN_MODULE(root) == main_module_schema);
+    } while (!augment && NULL != (root = root->next) && LYS_MAIN_MODULE(root) == main_module_schema);
 
     return SR_ERR_OK;
 }
@@ -1970,9 +2004,9 @@ dependencies:
     for (uint32_t i = 0; i < module_schema->ident_size; ++i) {
         ident = module_schema->ident + i;
         for (uint8_t b = 0; b < ident->base_size; b++) {
-            if (ident->base && module_schema != MD_MAIN_MODULE(ident->base[b])) {
-                module_lkp.name = (char *)MD_MAIN_MODULE(ident->base[b])->name;
-                module_lkp.revision_date = (char *)md_get_module_revision(MD_MAIN_MODULE(ident->base[b]));
+            if (ident->base && module_schema != LYS_MAIN_MODULE(ident->base[b])) {
+                module_lkp.name = (char *)LYS_MAIN_MODULE(ident->base[b])->name;
+                module_lkp.revision_date = (char *)md_get_module_revision(LYS_MAIN_MODULE(ident->base[b]));
                 module2 = (md_module_t *)sr_btree_search(md_ctx->modules_btree, &module_lkp);
                 if (NULL == module2) {
                     SR_LOG_ERR_MSG("Unable to resolve dependency induced by a derived identity.");
@@ -2001,9 +2035,9 @@ dependencies:
     /* process dependencies introduced by augments */
     for (uint32_t i = 0; i < module_schema->augment_size; ++i) {
         augment = module_schema->augment + i;
-        if (module_schema != MD_MAIN_MODULE(augment->target)) {
-            module_lkp.name = (char *)MD_MAIN_MODULE(augment->target)->name;
-            module_lkp.revision_date = (char *)md_get_module_revision(MD_MAIN_MODULE(augment->target));
+        if (module_schema != LYS_MAIN_MODULE(augment->target)) {
+            module_lkp.name = (char *)LYS_MAIN_MODULE(augment->target)->name;
+            module_lkp.revision_date = (char *)md_get_module_revision(LYS_MAIN_MODULE(augment->target));
             module2 = (md_module_t *)sr_btree_search(md_ctx->modules_btree, &module_lkp);
             if (NULL == module2) {
                 if (module->submodule && NULL != belongsto &&

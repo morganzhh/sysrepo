@@ -1076,18 +1076,74 @@ rp_set_item_req_process(rp_ctx_t *rp_ctx, rp_session_t *session, Sr__Msg *msg)
 
         /* set the value in data manager */
         if (SR_ERR_OK == rc) {
-            rc = rp_dt_set_item_wrapper(rp_ctx, session, xpath, value, msg->request->set_item_req->options);
+            rc = rp_dt_set_item_wrapper(rp_ctx, session, xpath, value, NULL, msg->request->set_item_req->options);
         }
     }
     else{
         /* when creating list or presence container value can be NULL */
-        rc = rp_dt_set_item_wrapper(rp_ctx, session, xpath, NULL, msg->request->set_item_req->options);
+        rc = rp_dt_set_item_wrapper(rp_ctx, session, xpath, NULL, NULL, msg->request->set_item_req->options);
     }
 
     if (SR_ERR_OK != rc) {
         SR_LOG_ERR("Set item failed for '%s', session id=%"PRIu32".", xpath, session->id);
     }
 
+    /* set response code */
+    resp->response->result = rc;
+
+    rc = rp_resp_fill_errors(resp, session->dm_session);
+    if (SR_ERR_OK != rc) {
+        SR_LOG_ERR_MSG("Copying errors to gpb failed");
+    }
+
+    /* send the response */
+    rc = cm_msg_send(rp_ctx->cm_ctx, resp);
+
+    return rc;
+}
+
+/**
+ * @brief Processes a set_item_str request.
+ */
+static int
+rp_set_item_str_req_process(rp_ctx_t *rp_ctx, rp_session_t *session, Sr__Msg *msg)
+{
+    Sr__Msg *resp = NULL;
+    sr_mem_ctx_t *sr_mem = NULL;
+    char *xpath = NULL;
+    char *value = NULL;
+    int rc = SR_ERR_OK;
+
+    CHECK_NULL_ARG5(rp_ctx, session, msg, msg->request, msg->request->set_item_str_req);
+
+    SR_LOG_DBG_MSG("Processing set_item_str request.");
+
+    xpath = msg->request->set_item_str_req->xpath;
+
+    /* allocate the response */
+    rc = sr_mem_new(0, &sr_mem);
+    CHECK_RC_MSG_RETURN(rc, "Failed to create a new Sysrepo memory context.");
+    rc = sr_gpb_resp_alloc(sr_mem, SR__OPERATION__SET_ITEM_STR, session->id, &resp);
+    if (SR_ERR_OK != rc) {
+        SR_LOG_ERR_MSG("Allocation of set_item_str response failed.");
+        sr_mem_free(sr_mem);
+        return SR_ERR_NOMEM;
+    }
+
+    if (NULL != msg->request->set_item_str_req->value) {
+        /* copy the value from gpb */
+        value = strdup(msg->request->set_item_str_req->value);
+        CHECK_NULL_NOMEM_GOTO(value, rc, cleanup);
+    }
+
+    /* set the value in data manager, when creating list or presence container value can be NULL */
+    rc = rp_dt_set_item_wrapper(rp_ctx, session, xpath, NULL, value, msg->request->set_item_str_req->options);
+
+    if (SR_ERR_OK != rc) {
+        SR_LOG_ERR("Set item failed for '%s', session id=%"PRIu32".", xpath, session->id);
+    }
+
+cleanup:
     /* set response code */
     resp->response->result = rc;
 
@@ -1618,6 +1674,7 @@ rp_subscribe_req_process(const rp_ctx_t *rp_ctx, const rp_session_t *session, Sr
     sr_mem_ctx_t *sr_mem = NULL;
     Sr__SubscribeReq *subscribe_req = NULL;
     np_subscr_options_t options = NP_SUBSCR_DEFAULT;
+    const char *username = NULL;
     int rc = SR_ERR_OK;
 
     CHECK_NULL_ARG5(rp_ctx, session, msg, msg->request, msg->request->subscribe_req);
@@ -1634,6 +1691,13 @@ rp_subscribe_req_process(const rp_ctx_t *rp_ctx, const rp_session_t *session, Sr
         return SR_ERR_NOMEM;
     }
     subscribe_req = msg->request->subscribe_req;
+    if (SR__SUBSCRIPTION_TYPE__EVENT_NOTIF_SUBS == subscribe_req->type) {
+        if (NULL != session->user_credentials->e_username) {
+            username = session->user_credentials->e_username;
+        } else {
+            username = session->user_credentials->r_username;
+        }
+    }
 
     /* set subscribe options */
     if (subscribe_req->has_enable_running && subscribe_req->enable_running) {
@@ -1650,7 +1714,7 @@ rp_subscribe_req_process(const rp_ctx_t *rp_ctx, const rp_session_t *session, Sr
     /* subscribe to the notification */
     rc = np_notification_subscribe(rp_ctx->np_ctx, session, subscribe_req->type,
             subscribe_req->destination, subscribe_req->subscription_id,
-            subscribe_req->module_name, subscribe_req->xpath,
+            subscribe_req->module_name, subscribe_req->xpath, username,
             (subscribe_req->has_notif_event ? subscribe_req->notif_event : SR__NOTIFICATION_EVENT__APPLY_EV),
             (subscribe_req->has_priority ? subscribe_req->priority : 0),
             sr_api_variant_gpb_to_sr(subscribe_req->api_variant),
@@ -2101,7 +2165,7 @@ rp_data_provide_resp_validate (rp_ctx_t *rp_ctx, rp_session_t *session, const ch
         char *xp = (char *) session->state_data_ctx.requested_xpaths->data[i];
         if (0 == strcmp(xp, xpath)) {
             found = true;
-            *sch_node = (struct lys_node *) ly_ctx_get_node(si->ly_ctx, NULL, xp);
+            *sch_node = sr_find_schema_node(si->module->data, xp, 0);
             if (NULL == *sch_node) {
                 SR_LOG_ERR("Schema node not found for %s", xp);
                 rc = SR_ERR_INVAL_ARG;
@@ -2120,7 +2184,7 @@ rp_data_provide_resp_validate (rp_ctx_t *rp_ctx, rp_session_t *session, const ch
 
     /* test that all values are under requested xpath */
     for (size_t i = 0; i < values_cnt; i++) {
-        value_sch_node = (struct lys_node *) ly_ctx_get_node(si->ly_ctx, NULL, values[i].xpath);
+        value_sch_node = sr_find_schema_node(si->module->data, values[i].xpath, 0);
         if (NULL == value_sch_node) {
             SR_LOG_ERR("Value with xpath %s received from provider doesn't correspond to any schema node",
                     values[i].xpath);
@@ -2149,23 +2213,14 @@ rp_data_provide_request_nested(rp_ctx_t *rp_ctx, rp_session_t *session, const ch
     int rc = SR_ERR_OK;
     struct lys_node *iter = NULL;
     size_t subs_index = 0;
-    struct ly_set *list_instances = NULL;
     char **xpaths = NULL;
     size_t xp_count = 0;
     char *request_xp = NULL;
 
     /* prepare xpaths where nested data will be requested */
     if (LYS_LIST == sch_node->nodetype) {
-        rc = dm_get_nodes_by_schema(session->dm_session, session->module_name, sch_node, &list_instances);
-        CHECK_RC_MSG_GOTO(rc, cleanup, "Dm_get_nodes_by_schema failed");
-
-        xpaths = calloc(list_instances->number, sizeof(*xpaths));
-        CHECK_NULL_NOMEM_GOTO(xpaths, rc, cleanup);
-
-        for (xp_count = 0; xp_count < list_instances->number; xp_count++) {
-            xpaths[xp_count] = lyd_path(list_instances->set.d[xp_count]);
-            CHECK_NULL_NOMEM_GOTO(xpaths[xp_count], rc, cleanup);
-        }
+        rc = rp_dt_create_instance_xps(session, sch_node, &xpaths, &xp_count);
+        CHECK_RC_MSG_RETURN(rc, "Failed to create xpaths for instances of sch node");
     } else {
         xpaths = calloc(1, sizeof(*xpaths));
         CHECK_NULL_NOMEM_GOTO(xpaths, rc, cleanup);
@@ -2184,7 +2239,8 @@ rp_data_provide_request_nested(rp_ctx_t *rp_ctx, rp_session_t *session, const ch
              */
             if (!rp_dt_find_subscription_covering_subtree(session, iter, &subs_index)) {
                 SR_LOG_ERR("Failed to find subscription for nested requests %s", xpath);
-                return SR_ERR_INTERNAL;
+                rc = SR_ERR_INTERNAL;
+                goto cleanup;
             }
         } else if (session->state_data_ctx.overlapping_leaf_subscription && ((LYS_LEAF | LYS_LEAFLIST) & iter->nodetype)) {
             /* check if we have exact match for leaf or leaf-list node */
@@ -2214,7 +2270,6 @@ cleanup:
         free(xpaths[i]);
     }
     free(xpaths);
-    ly_set_free(list_instances);
     free(request_xp);
 
     return rc;
@@ -2254,7 +2309,7 @@ rp_data_provide_resp_process(rp_ctx_t *rp_ctx, rp_session_t *session, Sr__Msg *m
 
     for (size_t i = 0; i < values_cnt; i++) {
         SR_LOG_DBG("Received value from data provider for xpath '%s'.", values[i].xpath);
-        rc = rp_dt_set_item(rp_ctx->dm_ctx, session->dm_session, values[i].xpath, SR_EDIT_DEFAULT, &values[i]);
+        rc = rp_dt_set_item(rp_ctx->dm_ctx, session->dm_session, values[i].xpath, SR_EDIT_DEFAULT, &values[i], NULL);
         if (SR_ERR_OK != rc) {
             //TODO: maybe validate if this path corresponds to the operational data
             SR_LOG_WRN("Failed to set operational data for xpath '%s'.", values[i].xpath);
@@ -2451,6 +2506,53 @@ rp_oper_data_timeout_req_process(rp_ctx_t *rp_ctx, rp_session_t *session, Sr__Ms
         rp_msg_process(rp_ctx, session, session->req);
     }
 
+    return rc;
+}
+
+static int
+rp_internal_state_data_req_process(rp_ctx_t *rp_ctx, rp_session_t *session, Sr__Msg * msg)
+{
+    CHECK_NULL_ARG5(rp_ctx, session, msg, msg->internal_request, msg->internal_request->internal_state_data_req);
+    int rc = SR_ERR_OK;
+    const char *xpath = msg->internal_request->internal_state_data_req->xpath;
+
+    SR_LOG_INF("Internal request for state data at xpath %s", xpath);
+
+    MUTEX_LOCK_TIMED_CHECK_GOTO(&session->cur_req_mutex, rc, cleanup);
+    if (RP_REQ_WAITING_FOR_DATA != session->state || NULL == session->req ||  msg->internal_request->internal_state_data_req->request_id != (intptr_t)session->req ) {
+        SR_LOG_ERR("State data arrived after timeout expiration or session id=%u is invalid.", session->id);
+        goto cleanup;
+    }
+
+    session->dp_req_waiting -= 1;
+    SR_LOG_DBG("Data provide response received, waiting for %zu more data providers.", session->dp_req_waiting);
+
+
+    /**
+     * Set internal state data - only one request come for each subtree, nested data has to be filled as well
+     * TODO:
+    if (0 == strcmp(xpath, "/ietf-netconf-acm:nacm/denied-operations")) {
+        sr_val_t val = {0};
+        val.type = SR_UINT32_T;
+        val.data.uint32_val = 42;
+
+        rc = rp_dt_set_item(rp_ctx->dm_ctx, session->dm_session, xpath, SR_EDIT_DEFAULT, &val);
+        if (SR_ERR_OK != rc) {
+            SR_LOG_WRN("Failed to set operational data for xpath '%s'.", xpath);
+        }
+    } else*/ {
+        SR_LOG_WRN("Request for not supported internal state data %s received ", xpath);
+    }
+
+
+cleanup:
+    if (0 == session->dp_req_waiting) {
+        SR_LOG_DBG("All data from data providers has been received session id = %u, reenque the request", session->id);
+        rp_dt_free_state_data_ctx_content(&session->state_data_ctx);
+        session->state = RP_REQ_DATA_LOADED;
+        rp_msg_process(rp_ctx, session, session->req);
+    }
+    pthread_mutex_unlock(&session->cur_req_mutex);
     return rc;
 }
 
@@ -2661,6 +2763,7 @@ rp_req_dispatch(rp_ctx_t *rp_ctx, rp_session_t *session, Sr__Msg *msg, bool *ski
         case SR__OPERATION__GET_SUBTREES:
         case SR__OPERATION__GET_SUBTREE_CHUNK:
         case SR__OPERATION__SET_ITEM:
+        case SR__OPERATION__SET_ITEM_STR:
         case SR__OPERATION__DELETE_ITEM:
         case SR__OPERATION__MOVE_ITEM:
         case SR__OPERATION__SESSION_REFRESH:
@@ -2711,6 +2814,9 @@ rp_req_dispatch(rp_ctx_t *rp_ctx, rp_session_t *session, Sr__Msg *msg, bool *ski
             break;
         case SR__OPERATION__SET_ITEM:
             rc = rp_set_item_req_process(rp_ctx, session, msg);
+            break;
+        case SR__OPERATION__SET_ITEM_STR:
+            rc = rp_set_item_str_req_process(rp_ctx, session, msg);
             break;
         case SR__OPERATION__DELETE_ITEM:
             rc = rp_delete_item_req_process(rp_ctx, session, msg);
@@ -2825,6 +2931,9 @@ rp_internal_req_dispatch(rp_ctx_t *rp_ctx, rp_session_t *session, Sr__Msg *msg)
             break;
         case SR__OPERATION__OPER_DATA_TIMEOUT:
             rc = rp_oper_data_timeout_req_process(rp_ctx, session, msg);
+            break;
+        case SR__OPERATION__INTERNAL_STATE_DATA:
+            rc = rp_internal_state_data_req_process(rp_ctx, session, msg);
             break;
         default:
             SR_LOG_ERR("Unsupported internal request received (operation=%d).", msg->internal_request->operation);
@@ -3035,6 +3144,102 @@ rp_worker_thread_execute(void *rp_ctx_p)
     return NULL;
 }
 
+static void
+rp_cleanup_internal_state_data_records(rp_ctx_t *rp_ctx)
+{
+    if (NULL != rp_ctx) {
+        sr_free_list_of_strings(rp_ctx->modules_incl_intern_op_data);
+
+        if (NULL != rp_ctx->inter_op_data_xpath) {
+            for (size_t i = 0; i < rp_ctx->inter_op_data_xpath->count; i++) {
+                sr_free_list_of_strings((sr_list_t *) rp_ctx->inter_op_data_xpath->data[i]);
+            }
+            sr_list_cleanup(rp_ctx->inter_op_data_xpath);
+        }
+    }
+}
+
+static int
+rp_enable_xps_for_internal_state_data(rp_ctx_t *rp_ctx)
+{
+    CHECK_NULL_ARG(rp_ctx);
+    int rc = SR_ERR_OK;
+    dm_schema_info_t *si = NULL;
+    char *xp_to_be_enabled = NULL;
+
+    for (size_t m = 0; m < rp_ctx->modules_incl_intern_op_data->count; m++) {
+        sr_list_t *module_xps = (sr_list_t *) rp_ctx->inter_op_data_xpath->data[m];
+        char *module_name = (char *) rp_ctx->modules_incl_intern_op_data->data[m];
+
+        rc = dm_get_module_and_lock(rp_ctx->dm_ctx, module_name, &si);
+        if (SR_ERR_OK != rc) {
+            SR_LOG_WRN("Module %s needed for internal state data is not installed.", module_name);
+            /* ignore this error */
+            rc = SR_ERR_OK;
+            continue;
+        }
+
+        for (size_t x = 0; x < module_xps->count; x++) {
+            xp_to_be_enabled = (char *) module_xps->data[x];
+            rc = rp_dt_enable_xpath(rp_ctx->dm_ctx, NULL, si, xp_to_be_enabled);
+            if (SR_ERR_OK != rc) {
+                pthread_rwlock_unlock(&si->model_lock);
+            }
+            CHECK_RC_LOG_RETURN(rc, "Failed to enable xpath %s", xp_to_be_enabled);
+        }
+        pthread_rwlock_unlock(&si->model_lock);
+
+    }
+    return rc;
+}
+
+static int
+rp_setup_internal_state_data(rp_ctx_t *rp_ctx)
+{
+    CHECK_NULL_ARG(rp_ctx);
+    int rc = SR_ERR_OK;
+
+    rc = sr_list_init(&rp_ctx->modules_incl_intern_op_data);
+    CHECK_RC_MSG_RETURN(rc, "List init failed");
+
+    rc = sr_list_init(&rp_ctx->inter_op_data_xpath);
+    CHECK_RC_MSG_GOTO(rc, cleanup, "List init failed");
+
+    /* setup here modules and subtrees of state data that will be handled internally */
+    /** TODO:
+     * sr_list_t *ietf_netconf_acm = NULL;
+    rc = sr_list_init(&ietf_netconf_acm);
+    CHECK_RC_MSG_GOTO(rc, cleanup, "List init failed");
+
+    rc = sr_list_add(ietf_netconf_acm, strdup("/ietf-netconf-acm:nacm/denied-operations"));
+    CHECK_RC_MSG_GOTO(rc, cleanup, "List add failed");
+
+    rc = sr_list_add(ietf_netconf_acm, strdup("/ietf-netconf-acm:nacm/denied-data-writes"));
+    CHECK_RC_MSG_GOTO(rc, cleanup, "List add failed");
+
+    rc = sr_list_add(ietf_netconf_acm, strdup("/ietf-netconf-acm:nacm/denied-notifications"));
+    CHECK_RC_MSG_GOTO(rc, cleanup, "List add failed");
+
+
+    rc = sr_list_add(rp_ctx->modules_incl_intern_op_data, strdup("ietf-netconf-acm"));
+    CHECK_RC_MSG_GOTO(rc, cleanup, "List add failed");
+
+    rc = sr_list_add(rp_ctx->inter_op_data_xpath, ietf_netconf_acm);
+    CHECK_RC_MSG_GOTO(rc, cleanup, "List add failed");
+    ietf_netconf_acm = NULL;*/
+
+    rc = rp_enable_xps_for_internal_state_data(rp_ctx);
+    CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to enable xpaths for internal state data");
+
+cleanup:
+    if (SR_ERR_OK != rc) {
+        //sr_free_list_of_strings(ietf_netconf_acm);
+        rp_cleanup_internal_state_data_records(rp_ctx);
+    }
+    return rc;
+}
+
+
 int
 rp_init(cm_ctx_t *cm_ctx, rp_ctx_t **rp_ctx_p)
 {
@@ -3098,6 +3303,9 @@ rp_init(cm_ctx_t *cm_ctx, rp_ctx_t **rp_ctx_p)
         SR_LOG_ERR_MSG("Data Manager initialization failed.");
         goto cleanup;
     }
+
+    rc = rp_setup_internal_state_data(ctx);
+    CHECK_RC_MSG_GOTO(rc, cleanup, "Set up of internal state data failed");
 
     /* run worker threads */
     pthread_mutex_init(&ctx->request_queue_mutex, NULL);
@@ -3165,6 +3373,7 @@ rp_cleanup(rp_ctx_t *rp_ctx)
         pm_cleanup(rp_ctx->pm_ctx);
         ac_cleanup(rp_ctx->ac_ctx);
         sr_cbuff_cleanup(rp_ctx->request_queue);
+        rp_cleanup_internal_state_data_records(rp_ctx);
         free(rp_ctx);
     }
 

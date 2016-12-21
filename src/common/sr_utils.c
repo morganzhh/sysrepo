@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <pwd.h>
+#include <grp.h>
 #include <libyang/libyang.h>
 
 #include "sr_common.h"
@@ -65,17 +67,35 @@ sr_uint32_to_buff(uint32_t number, uint8_t *buff)
     }
 }
 
-int
+bool
 sr_str_ends_with(const char *str, const char *suffix)
 {
-    CHECK_NULL_ARG2(str, suffix);
+    if (NULL == str || NULL == suffix) {
+        return false;
+    }
 
     size_t str_len = strlen(str);
     size_t suffix_len = strlen(suffix);
-    if (suffix_len >  str_len){
-        return 0;
+    if (suffix_len > str_len){
+        return false;
     }
     return strncmp(str + str_len - suffix_len, suffix, suffix_len) == 0;
+}
+
+bool
+sr_str_begins_with(const char *str, const char *prefix)
+{
+    if (NULL == str || NULL == prefix) {
+        return false;
+    }
+
+    while (*prefix && *str) {
+        if (*prefix++ != *str++) {
+            return false;
+        }
+    }
+
+    return *prefix == '\0';
 }
 
 int
@@ -125,6 +145,23 @@ sr_str_trim(char *str) {
     while(*ptr && isspace(*ptr)) ++ptr, --len;
 
     memmove(str, ptr, len + 1);
+}
+
+uint32_t
+sr_str_hash(const char *str)
+{
+    uint32_t hash = 5381;
+    char c;
+
+    if (NULL == str) {
+        return 0;
+    }
+
+    while ('\0' != (c = *str++)) {
+        hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
+    }
+
+    return hash;
 }
 
 int
@@ -504,6 +541,91 @@ cleanup:
     return rc;
 }
 
+int
+sr_ly_set_contains(const struct ly_set *set, void *node, bool sorted)
+{
+    if (NULL == set || NULL == node) {
+        return -1;
+    }
+
+    if (sorted) {
+        int lo = 0, hi = set->number-1, mid = 0;
+        while (lo <= hi) {
+            mid = lo + ((hi-lo) >> 1);
+            if (set->set.g[mid] == node) {
+                return mid;
+            } else if (set->set.g[mid] < node) {
+                lo = mid+1;
+            } else {
+                hi = mid-1;
+            }
+        }
+        return -1;
+    } else {
+        return ly_set_contains(set, node);
+    }
+}
+
+/**
+ * @brief Comparison function for ly_set.
+ */
+static int
+sr_ly_set_cmp(const void *item1, const void *item2)
+{
+    return (*(int **)item1) - (*(int **)item2);
+}
+
+int
+sr_ly_set_sort(struct ly_set *set)
+{
+    CHECK_NULL_ARG(set);
+
+    if (set->number <= 16) {
+        /* for smaller sets use insertion sort */
+        for (int i = 1; i < set->number; ++i) {
+            void *key = set->set.g[i];
+            int j = i-1;
+            while (j >= 0 && set->set.g[j] > key) {
+                set->set.g[j+1] = set->set.g[j];
+                --j;
+            }
+            set->set.g[j+1] = key;
+        }
+    } else {
+        qsort(set->set.g, set->number, sizeof(void *), sr_ly_set_cmp);
+    }
+
+    return SR_ERR_OK;
+}
+
+bool
+sr_lys_data_node(struct lys_node *node)
+{
+    if (NULL == node) {
+        return false;
+    }
+
+    return node->nodetype & (LYS_CONTAINER | LYS_LEAF | LYS_LEAFLIST | LYS_LIST |
+                             LYS_ANYXML | LYS_NOTIF | LYS_RPC | LYS_ACTION | LYS_ANYDATA);
+}
+
+struct lys_node *
+sr_lys_node_get_data_parent(struct lys_node *node, bool augment)
+{
+    node = node ? node->parent : NULL;
+
+    while (node && !sr_lys_data_node(node) &&
+            (!augment || LYS_AUGMENT != node->nodetype)) {
+        if (LYS_AUGMENT == node->nodetype) {
+            node = ((struct lys_node_augment *)node)->target;
+        } else {
+            node = node->parent;
+        }
+    }
+
+    return node;
+}
+
 struct lyd_node*
 sr_dup_datatree(struct lyd_node *root) {
     struct lyd_node *dup = NULL, *s = NULL, *n = NULL;
@@ -681,8 +803,7 @@ sr_libyang_leaf_get_type_sch(const struct lys_node_leaf *leaf)
 sr_type_t
 sr_libyang_leaf_get_type(const struct lyd_node_leaf_list *leaf)
 {
-
-    switch(leaf->value_type){
+    switch(leaf->value_type) {
         case LY_TYPE_BINARY:
             return SR_BINARY_T;
         case LY_TYPE_BITS:
@@ -835,6 +956,10 @@ sr_check_value_conform_to_schema(const struct lys_node *node, const sr_val_t *va
             type = SR_UNKNOWN_T;
             //LY_DERIVED
         }
+    } else if (LYS_ANYXML == node->nodetype) {  /* cannot use bitwise or, since LYS_ANYXML is sub-type of LYS_ANYDATA */
+        type = SR_ANYXML_T;
+    } else if (LYS_ANYDATA & node->nodetype) {
+        type = SR_ANYDATA_T;
     }
 matching_done:
     if (type != value->type) {
@@ -902,6 +1027,8 @@ sr_libyang_val_str_to_sr_val(const char *val_str, sr_type_t type, sr_val_t *valu
     case SR_IDENTITYREF_T:
     case SR_INSTANCEID_T:
     case SR_STRING_T:
+    case SR_ANYXML_T:
+    case SR_ANYDATA_T:
         sr_mem_edit_string(value->_sr_mem, &value->data.string_val, val_str);
         CHECK_NULL_NOMEM_RETURN(value->data.string_val);
         return SR_ERR_OK;
@@ -974,6 +1101,19 @@ sr_libyang_get_actual_leaf_type(struct lys_type *base_info, LY_DATA_TYPE type)
     return NULL;
 }
 
+static int
+sr_mem_edit_string_va_wrapper(sr_mem_ctx_t *sr_mem, char **string_p, const char *format, ...)
+{
+    va_list arg_list;
+    int rc = SR_ERR_OK;
+
+    va_start(arg_list, format);
+    rc = sr_mem_edit_string_va(sr_mem, string_p, format, arg_list);
+    va_end(arg_list);
+
+    return rc;
+}
+
 int
 sr_libyang_leaf_copy_value(const struct lyd_node_leaf_list *leaf, sr_val_t *value)
 {
@@ -1037,22 +1177,23 @@ sr_libyang_leaf_copy_value(const struct lyd_node_leaf_list *leaf, sr_val_t *valu
         }
         return SR_ERR_OK;
     case LY_TYPE_IDENT:
-        if (NULL == leaf->value.ident->name) {
-            SR_LOG_ERR("Identity ref in leaf '%s' is NULL", node_name);
+        if (NULL == leaf->schema || NULL == leaf->value.ident->name) {
+            SR_LOG_ERR("Identity ref or schema in leaf '%s' is NULL", node_name);
             return SR_ERR_INTERNAL;
         }
-        sr_mem_edit_string(value->_sr_mem, &value->data.identityref_val, leaf->value.ident->name);
+        if (leaf->schema->module == leaf->value.ident->module) {
+            sr_mem_edit_string(value->_sr_mem, &value->data.identityref_val, leaf->value.ident->name);
+        } else {
+            sr_mem_edit_string_va_wrapper(value->_sr_mem, &value->data.identityref_val, "%s:%s", leaf->value.ident->module->name, leaf->value.ident->name);
+        }
+
         if (NULL == value->data.identityref_val) {
             SR_LOG_ERR("Copy value failed for leaf '%s' of type 'identityref'", node_name);
             return SR_ERR_INTERNAL;
         }
         return SR_ERR_OK;
     case LY_TYPE_INST:
-        /* NOT IMPLEMENTED yet*/
-        if (NULL != leaf->schema && NULL != leaf->schema->name) {
-            SR_LOG_ERR("Copy value failed for leaf '%s'", node_name);
-        }
-        return SR_ERR_INTERNAL;
+        return sr_libyang_val_str_to_sr_val(leaf->value_str, value->type, value);
     case LY_TYPE_LEAFREF:
         return sr_libyang_val_str_to_sr_val(leaf->value_str, value->type, value);
     case LY_TYPE_STRING:
@@ -1098,6 +1239,42 @@ sr_libyang_leaf_copy_value(const struct lyd_node_leaf_list *leaf, sr_val_t *valu
     }
 }
 
+int
+sr_libyang_anydata_copy_value(const struct lyd_node_anydata *node, sr_val_t *value)
+{
+    CHECK_NULL_ARG2(node, value);
+    const char *node_name = "(unknown)";
+    if (NULL != node->schema && NULL != node->schema->name) {
+        node_name = node->schema->name;
+    }
+
+    if (LYD_ANYDATA_DATATREE == node->value_type || LYD_ANYDATA_XML == node->value_type) {
+        SR_LOG_ERR("Unsupported (non-string) anydata value type for node '%s'", node_name);
+    }
+    if ((NULL != node->schema) && (NULL != node->value.str)) {
+        switch (node->schema->nodetype) {
+            case LYS_ANYXML:
+                sr_mem_edit_string(value->_sr_mem, &value->data.anyxml_val, node->value.str);
+                if (NULL == value->data.anyxml_val) {
+                    SR_LOG_ERR_MSG("String duplication failed");
+                    return SR_ERR_NOMEM;
+                }
+                break;
+            case LYS_ANYDATA:
+                sr_mem_edit_string(value->_sr_mem, &value->data.anydata_val, node->value.str);
+                if (NULL == value->data.anydata_val) {
+                    SR_LOG_ERR_MSG("String duplication failed");
+                    return SR_ERR_NOMEM;
+                }
+                break;
+            default:
+                SR_LOG_ERR("Copy value failed for anydata node '%s'", node_name);
+                return SR_ERR_INTERNAL;
+        }
+    }
+
+    return SR_ERR_OK;
+}
 
 static int
 sr_dec64_to_str(double val, const struct lys_node *schema_node, char **out)
@@ -1129,7 +1306,7 @@ sr_dec64_to_str(double val, const struct lys_node *schema_node, char **out)
 }
 
 int
-sr_val_to_str(const sr_val_t *value, const struct lys_node *schema_node, char **out)
+sr_val_to_str_with_schema(const sr_val_t *value, const struct lys_node *schema_node, char **out)
 {
     CHECK_NULL_ARG3(value, schema_node, out);
     size_t len = 0;
@@ -1238,6 +1415,24 @@ sr_val_to_str(const sr_val_t *value, const struct lys_node *schema_node, char **
         CHECK_NULL_NOMEM_RETURN(*out);
         snprintf(*out, len + 1, "%"PRIu64, value->data.uint64_val);
         break;
+    case SR_ANYXML_T:
+        if (NULL != value->data.anyxml_val){
+            *out = strdup(value->data.anyxml_val);
+            CHECK_NULL_NOMEM_RETURN(*out);
+        } else {
+            *out = NULL;
+            return SR_ERR_OK;
+        }
+        break;
+    case SR_ANYDATA_T:
+        if (NULL != value->data.anydata_val){
+            *out = strdup(value->data.anydata_val);
+            CHECK_NULL_NOMEM_RETURN(*out);
+        } else {
+            *out = NULL;
+            return SR_ERR_OK;
+        }
+        break;
     default:
         SR_LOG_ERR_MSG("Conversion of value_t to string failed");
         *out = NULL;
@@ -1298,13 +1493,16 @@ sr_api_variant_from_str(const char *api_variant_str)
  */
 static int
 sr_copy_node_to_tree_internal(const struct lyd_node *parent, const struct lyd_node *node, size_t depth,
-         size_t slice_offset, size_t slice_width, size_t child_limit, size_t depth_limit, sr_node_t *sr_tree)
+         size_t slice_offset, size_t slice_width, size_t child_limit, size_t depth_limit,
+         sr_tree_pruning_cb pruning_cb, void *pruning_ctx, sr_node_t *sr_tree)
 {
     int rc = SR_ERR_OK;
     struct lyd_node_leaf_list *data_leaf = NULL;
     struct lys_node_container *cont = NULL;
+    struct lyd_node_anydata *sch_any = NULL;
     const struct lyd_node *child = NULL;
     size_t idx = 0;
+    bool prune = false;
     sr_node_t *sr_subtree = NULL;
 
     CHECK_NULL_ARG2(node, sr_tree);
@@ -1320,10 +1518,7 @@ sr_copy_node_to_tree_internal(const struct lyd_node *parent, const struct lyd_no
             data_leaf = (struct lyd_node_leaf_list *)node;
             sr_tree->type = sr_libyang_leaf_get_type(data_leaf);
             rc = sr_libyang_leaf_copy_value(data_leaf, (sr_val_t *)sr_tree);
-            if (SR_ERR_OK != rc) {
-                SR_LOG_ERR("Error returned from sr_libyang_leaf_copy_value: %s.", sr_strerror(rc));
-                goto cleanup;
-            }
+            CHECK_RC_LOG_GOTO(rc, cleanup, "Error returned from sr_libyang_leaf_copy_value: %s.", sr_strerror(rc));
             break;
         case LYS_CONTAINER:
             cont = (struct lys_node_container *)node->schema;
@@ -1331,6 +1526,13 @@ sr_copy_node_to_tree_internal(const struct lyd_node *parent, const struct lyd_no
             break;
         case LYS_LIST:
             sr_tree->type = SR_LIST_T;
+            break;
+        case LYS_ANYXML:
+        case LYS_ANYDATA:
+            sch_any = (struct lyd_node_anydata *) node;
+            sr_tree->type = (LYS_ANYXML == node->schema->nodetype) ? SR_ANYXML_T : SR_ANYDATA_T;
+            rc = sr_libyang_anydata_copy_value(sch_any, (sr_val_t *)sr_tree);
+            CHECK_RC_LOG_GOTO(rc, cleanup, "Error returned from sr_libyang_anydata_copy_value: %s.", sr_strerror(rc));
             break;
         default:
             SR_LOG_ERR("Detected unsupported node data type (schema name: %s).", sr_tree->name);
@@ -1356,12 +1558,21 @@ sr_copy_node_to_tree_internal(const struct lyd_node *parent, const struct lyd_no
                 (0 < depth || slice_width > idx - slice_offset) /* slice width */ &&
                 (0 == depth || child_limit > idx) /* child_limit */ &&
                 (depth_limit > depth + 1) /* depth limit */) {
+                prune = false;
+                if (NULL != pruning_cb) {
+                    rc = pruning_cb(pruning_ctx, child, &prune);
+                    CHECK_RC_MSG_GOTO(rc, cleanup, "Tree pruning has failed.");
+                }
+                if (true == prune) {
+                    child = child->next;
+                    continue;
+                }
                 rc = sr_node_add_child(sr_tree, NULL, NULL, &sr_subtree);
                 if (SR_ERR_OK != rc) {
                     goto cleanup;
                 }
                 rc = sr_copy_node_to_tree_internal(node, child, depth + 1, slice_offset, slice_width,
-                        child_limit, depth_limit, sr_subtree);
+                        child_limit, depth_limit, pruning_cb, pruning_ctx, sr_subtree);
                 if (SR_ERR_OK != rc) {
                     goto cleanup;
                 }
@@ -1379,70 +1590,41 @@ cleanup:
 }
 
 int
-sr_copy_node_to_tree(const struct lyd_node *node, sr_node_t *sr_tree)
+sr_copy_node_to_tree(const struct lyd_node *node, sr_tree_pruning_cb pruning_cb, void *pruning_ctx, sr_node_t *sr_tree)
 {
-    return sr_copy_node_to_tree_internal(NULL, node, 0, 0, SIZE_MAX, SIZE_MAX, SIZE_MAX, sr_tree);
+    return sr_copy_node_to_tree_internal(NULL, node, 0, 0, SIZE_MAX, SIZE_MAX, SIZE_MAX, pruning_cb, pruning_ctx, sr_tree);
 }
 
 int
 sr_copy_node_to_tree_chunk(const struct lyd_node *node, size_t slice_offset, size_t slice_width, size_t child_limit,
-        size_t depth_limit, sr_node_t *sr_tree)
+        size_t depth_limit, sr_tree_pruning_cb pruning_cb, void *pruning_ctx, sr_node_t *sr_tree)
 {
-    return sr_copy_node_to_tree_internal(NULL, node, 0, slice_offset, slice_width, child_limit, depth_limit, sr_tree);
+    return sr_copy_node_to_tree_internal(NULL, node, 0, slice_offset, slice_width, child_limit, depth_limit,
+            pruning_cb, pruning_ctx, sr_tree);
 }
 
 int
-sr_nodes_to_trees(struct ly_set *nodes, sr_mem_ctx_t *sr_mem, sr_node_t **sr_trees, size_t *count)
+sr_nodes_to_trees(struct ly_set *nodes, sr_mem_ctx_t *sr_mem, sr_tree_pruning_cb pruning_cb, void *pruning_ctx,
+        sr_node_t **sr_trees, size_t *count)
 {
-    int rc = SR_ERR_OK;
-    sr_node_t *trees = NULL;
-    sr_mem_snapshot_t snapshot = { 0, };
-    size_t i = 0;
-
-    CHECK_NULL_ARG3(nodes, sr_trees, count);
-
-    if (0 == nodes->number) {
-        *sr_trees = NULL;
-        *count = 0;
-        return rc;
-    }
-
-    if (sr_mem) {
-        sr_mem_snapshot(sr_mem, &snapshot);
-    }
-
-    trees = sr_calloc(sr_mem, nodes->number, sizeof *trees);
-    CHECK_NULL_NOMEM_RETURN(trees);
-    if (sr_mem) {
-        ++sr_mem->obj_count;
-    }
-
-    for (i = 0; i < nodes->number && 0 == rc; ++i) {
-        trees[i]._sr_mem = sr_mem;
-        rc = sr_copy_node_to_tree_internal(NULL, nodes->set.d[i], 0, 0, SIZE_MAX, SIZE_MAX, SIZE_MAX, trees + i);
-    }
-
-    if (SR_ERR_OK == rc) {
-        *sr_trees = trees;
-        *count = nodes->number;
-    } else {
-        if (sr_mem) {
-            sr_mem_restore(&snapshot);
-        } else {
-            sr_free_trees(trees, i);
-        }
-    }
-    return rc;
+    return sr_nodes_to_tree_chunks(nodes, 0, SIZE_MAX, SIZE_MAX, SIZE_MAX, sr_mem, pruning_cb, pruning_ctx,
+            sr_trees, count, NULL);
 }
 
 int
 sr_nodes_to_tree_chunks(struct ly_set *nodes, size_t slice_offset, size_t slice_width, size_t child_limit,
-        size_t depth_limit, sr_mem_ctx_t *sr_mem, sr_node_t **sr_trees, size_t *count)
+        size_t depth_limit, sr_mem_ctx_t *sr_mem, sr_tree_pruning_cb pruning_cb, void *pruning_ctx,
+        sr_node_t **sr_trees, size_t *count, char ***chunk_ids_p)
 {
     int rc = SR_ERR_OK;
     sr_node_t *trees = NULL;
+    size_t tree_cnt = 0;
     sr_mem_snapshot_t snapshot = { 0, };
-    size_t i = 0;
+    sr_bitset_t *pruned = NULL;
+    bool prune = false;
+    size_t i = 0, j = 0;
+    char **chunk_ids = NULL;
+    char *chunk_id = NULL;
 
     CHECK_NULL_ARG3(nodes, sr_trees, count);
 
@@ -1456,26 +1638,92 @@ sr_nodes_to_tree_chunks(struct ly_set *nodes, size_t slice_offset, size_t slice_
         sr_mem_snapshot(sr_mem, &snapshot);
     }
 
-    trees = sr_calloc(sr_mem, nodes->number, sizeof *trees);
-    CHECK_NULL_NOMEM_RETURN(trees);
+    /* find out which trees should be completely pruned away and which should not */
+    if (NULL != pruning_cb) {
+        rc = sr_bitset_init(nodes->number, &pruned);
+        CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to initialize bitset.");
+        for (i = 0; i < nodes->number; ++i) {
+            rc = pruning_cb(pruning_ctx, nodes->set.d[i], &prune);
+            CHECK_RC_MSG_GOTO(rc, cleanup, "Tree pruning has failed.");
+            rc = sr_bitset_set(pruned, i, prune);
+            CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to enable bit in a bitset.");
+            tree_cnt += !prune;
+        }
+    } else {
+        tree_cnt = nodes->number;
+    }
+
+    if (0 == tree_cnt) {
+        goto cleanup;
+    }
+
+    if (NULL != chunk_ids_p) {
+        chunk_ids = sr_calloc(sr_mem, tree_cnt, sizeof(char *));
+        CHECK_NULL_NOMEM_GOTO(chunk_ids, rc, cleanup);
+        for (i = j = 0; i < nodes->number; ++i) {
+            prune = false;
+            if (NULL != pruned) {
+                rc = sr_bitset_get(pruned, i, &prune);
+                CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to get value of a bit in a bitset.");
+            }
+            if (prune) {
+                continue;
+            }
+            chunk_id = lyd_path(nodes->set.d[i]);
+            if (NULL == chunk_id) {
+                SR_LOG_ERR_MSG("Failed to get ID of a subtree chunk.");
+                rc = SR_ERR_INTERNAL;
+                goto cleanup;
+            }
+            rc = sr_mem_edit_string(sr_mem, chunk_ids+j, chunk_id);
+            free(chunk_id);
+            if (SR_ERR_OK != rc) {
+                SR_LOG_ERR_MSG("Failed to store ID of a subtree chunk.");
+                rc = SR_ERR_INTERNAL;
+                goto cleanup;
+            }
+            ++j;
+        }
+    }
+
+    trees = sr_calloc(sr_mem, tree_cnt, sizeof *trees);
+    CHECK_NULL_NOMEM_GOTO(trees, rc, cleanup);
     if (sr_mem) {
         ++sr_mem->obj_count;
     }
 
-    for (i = 0; i < nodes->number && 0 == rc; ++i) {
-        trees[i]._sr_mem = sr_mem;
+    for (i = j = 0; i < nodes->number && 0 == rc; ++i) {
+        prune = false;
+        if (NULL != pruned) {
+            rc = sr_bitset_get(pruned, i, &prune);
+            CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to get value of a bit in a bitset.");
+        }
+        if (prune) {
+            continue;
+        }
+        trees[j]._sr_mem = sr_mem;
         rc = sr_copy_node_to_tree_internal(NULL, nodes->set.d[i], 0, slice_offset, slice_width, child_limit,
-                depth_limit, trees + i);
+                depth_limit, pruning_cb, pruning_ctx, trees + j);
+        ++j;
     }
 
+cleanup:
+    sr_bitset_cleanup(pruned);
     if (SR_ERR_OK == rc) {
         *sr_trees = trees;
-        *count = nodes->number;
+        *count = tree_cnt;
+        if (NULL != chunk_ids_p) {
+            *chunk_ids_p = chunk_ids;
+        }
     } else {
         if (sr_mem) {
             sr_mem_restore(&snapshot);
         } else {
-            sr_free_trees(trees, i);
+            for (size_t i = 0; NULL != chunk_ids && i < tree_cnt; ++i) {
+                free(chunk_ids[i]);
+            }
+            free(chunk_ids);
+            sr_free_trees(trees, tree_cnt);
         }
     }
     return rc;
@@ -1585,7 +1833,7 @@ sr_subtree_to_dt(struct ly_ctx *ly_ctx, const sr_node_t *sr_tree, bool output, s
                 return SR_ERR_INTERNAL;
             }
             /* copy argument value to string */
-            ret = sr_val_to_str((sr_val_t *)sr_tree, sch_node, &string_val);
+            ret = sr_val_to_str_with_schema((sr_val_t *)sr_tree, sch_node, &string_val);
             if (SR_ERR_OK != ret) {
                 SR_LOG_ERR("Unable to convert value to string for sysrepo node: %s.", sr_tree->name);
                 return ret;
@@ -1689,6 +1937,12 @@ sr_free_val_content(sr_val_t *value)
     }
     else if (SR_INSTANCEID_T == value->type){
         free(value->data.instanceid_val);
+    }
+    else if (SR_ANYXML_T == value->type){
+        free(value->data.anyxml_val);
+    }
+    else if (SR_ANYDATA_T == value->type){
+        free(value->data.anydata_val);
     }
     value->xpath = NULL;
     value->data.int64_val = 0;
@@ -2290,4 +2544,130 @@ cleanup:
         free(buffer);
     }
     return rc;
+}
+
+int
+sr_get_system_groups(const char *username, char ***groups_p, size_t *group_cnt_p)
+{
+#define MAX_BUF_REALLOC_ATEMPTS   10
+    int rc = SR_ERR_OK, ret = 0;
+    size_t max_attempts = MAX_BUF_REALLOC_ATEMPTS;
+    size_t group_cnt = 0;
+    int group_id_cnt = 16;
+#ifdef __APPLE__
+    int *group_ids = NULL, *tmp_group_ids = NULL;
+    int user_gid = 0;
+#else
+    gid_t *group_ids = NULL, *tmp_group_ids = NULL;
+    gid_t user_gid = 0;
+#endif
+    char **groups = NULL;
+    struct passwd pw = {0}, *pw_p = NULL;
+    struct group gr = {0}, *gr_p = NULL;
+    size_t pw_bufsize = sysconf(_SC_GETPW_R_SIZE_MAX);
+    size_t gr_bufsize = sysconf(_SC_GETGR_R_SIZE_MAX);
+    char *tmp_buf = NULL, *pw_buf = NULL, *gr_buf = NULL;
+    CHECK_NULL_ARG3(username, groups_p, group_cnt_p);
+
+    if (-1 == pw_bufsize) {
+        pw_bufsize = 256;
+    }
+
+    if (-1 == gr_bufsize) {
+        gr_bufsize = 256;
+    }
+
+    /* get the user's primary group */
+    pw_buf = malloc(pw_bufsize);
+    CHECK_NULL_NOMEM_GOTO(pw_buf, rc, cleanup);
+
+    max_attempts = MAX_BUF_REALLOC_ATEMPTS;
+    while (max_attempts && ERANGE == (ret = getpwnam_r(username, &pw, pw_buf, pw_bufsize, &pw_p))) {
+        tmp_buf = realloc(pw_buf, pw_bufsize << 1);
+        CHECK_NULL_NOMEM_GOTO(tmp_buf, rc, cleanup);
+        pw_buf = tmp_buf;
+        pw_bufsize <<= 1;
+        --max_attempts;
+    }
+    CHECK_ZERO_LOG_GOTO(ret, rc, SR_ERR_IO, cleanup,
+                        "Failed to get the password file record for user '%s': %s. ", username, sr_strerror_safe(ret));
+    if (NULL == pw_p) {
+        goto cleanup;
+    }
+#ifdef __APPLE__
+    user_gid = (int)pw.pw_gid;
+#else
+    user_gid = pw.pw_gid;
+#endif
+
+    /* get secondary groups */
+    group_ids = calloc(group_id_cnt, sizeof *group_ids);
+    CHECK_NULL_NOMEM_GOTO(group_ids, rc, cleanup);
+
+    max_attempts = MAX_BUF_REALLOC_ATEMPTS;
+    while (max_attempts && (ret = getgrouplist(username, user_gid, group_ids, &group_id_cnt)) < 0) {
+        tmp_group_ids = realloc(group_ids, group_id_cnt * (sizeof *tmp_group_ids));
+        CHECK_NULL_NOMEM_GOTO(tmp_group_ids, rc, cleanup);
+        group_ids = tmp_group_ids;
+        --max_attempts;
+    }
+    CHECK_NOT_MINUS1_LOG_GOTO(ret, rc, SR_ERR_IO, cleanup,
+                              "Failed to get the list of secondary groups for user '%s'.", username);
+    if (0 == group_id_cnt) {
+        goto cleanup;
+    }
+
+    /* get names of the groups */
+    groups = calloc(group_id_cnt, sizeof(char *));
+    CHECK_NULL_NOMEM_GOTO(groups, rc, cleanup);
+
+    gr_buf = malloc(gr_bufsize);
+    CHECK_NULL_NOMEM_GOTO(gr_buf, rc, cleanup);
+
+    for (size_t i = 0; i < group_id_cnt; ++i) {
+        max_attempts = MAX_BUF_REALLOC_ATEMPTS;
+        while (max_attempts && ERANGE == (ret = getgrgid_r((gid_t)group_ids[i], &gr, gr_buf, gr_bufsize, &gr_p))) {
+            tmp_buf = realloc(gr_buf, gr_bufsize << 1);
+            CHECK_NULL_NOMEM_GOTO(gr_buf, rc, cleanup);
+            gr_buf = tmp_buf;
+            gr_bufsize <<= 1;
+            --max_attempts;
+        }
+        CHECK_ZERO_LOG_GOTO(ret, rc, SR_ERR_IO, cleanup,
+                            "Failed to get the group database entry for gid '%d': %s. ",
+                            group_ids[i], sr_strerror_safe(ret));
+        if (NULL != gr_p && NULL != gr.gr_name) {
+            groups[group_cnt] = strdup(gr.gr_name);
+            CHECK_NULL_NOMEM_GOTO(groups[group_cnt], rc, cleanup);
+            ++group_cnt;
+        }
+    }
+
+cleanup:
+    free(pw_buf);
+    free(gr_buf);
+    free(group_ids);
+    if (SR_ERR_OK == rc) {
+        *groups_p = groups;
+        *group_cnt_p = group_cnt;
+    } else {
+        if (NULL != groups) {
+            for (size_t i = 0; i < group_cnt; ++i) {
+                free(groups[i]);
+            }
+            free(groups);
+        }
+    }
+    return rc;
+}
+
+void
+sr_free_list_of_strings (sr_list_t *list)
+{
+    if (NULL != list) {
+        for (size_t i = 0; i < list->count; i++) {
+            free((char *) list->data[i]);
+        }
+        sr_list_cleanup(list);
+    }
 }

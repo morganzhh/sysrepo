@@ -71,7 +71,7 @@ class Print {
 
 class My_Callback extends Callback {
 	/* Function to be called for subscribed client of given session whenever configuration changes. */
-	public void module_change(Session sess, String module_name, sr_notif_event_t event, SWIGTYPE_p_void private_ctx) {
+	public int module_change(Session sess, String module_name, sr_notif_event_t event, SWIGTYPE_p_void private_ctx) {
 		System.out.println("\n\n ========== CONFIG HAS CHANGED, CURRENT RUNNING CONFIG: ==========\n");
 
 		try {
@@ -87,11 +87,10 @@ class My_Callback extends Callback {
 
 			String change_path = "/" + module_name + ":*";
 
-			Subscribe subscribe = new Subscribe(sess);
-			Iter_Change it = subscribe.get_changes_iter(change_path);
+			Iter_Change it = sess.get_changes_iter(change_path);
 
 			while (true) {
-				Change change = subscribe.get_change_next(it);
+				Change change = sess.get_change_next(it);
 				if (change == null)
 					break;
 				print.change(change.oper(), change.old_val(), change.new_val());
@@ -101,6 +100,7 @@ class My_Callback extends Callback {
 		} catch (Exception e) {
 			System.out.println(e);
 		}
+                return sr_error_t.SR_ERR_OK.swigValue();
 	}
 }
 

@@ -179,7 +179,8 @@ class My_Callback:public Callback {
         out_vals->val(2)->set("/test-module:activate-software-image/location",\
                             "/root/",\
                             SR_STRING_T);
-        return SR_ERR_OK;
+
+	return SR_ERR_OK;
     }
 
     int rpc_tree(const char *xpath, S_Trees in_trees, S_Trees_Holder holder, void *private_ctx) {
@@ -197,6 +198,7 @@ class My_Callback:public Callback {
         out_trees->tree(2)->set_name("location");
         out_trees->tree(2)->set("/root/", SR_STRING_T);
         return SR_ERR_OK;
+
     }
 };
 

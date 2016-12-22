@@ -967,6 +967,23 @@ rp_dt_send_request_to_dp_subscription(rp_ctx_t *rp_ctx, rp_session_t *rp_session
             ptr--;
         }
 
+        int rest = strlen(ptr);
+        char* tmp = ptr;
+        while ( rest > 0)
+        {
+            if ('/' == *tmp) {
+                tmp++;
+                break;
+            }
+            tmp++;
+            rest--;
+        }
+
+        if (0 != rest)
+        {
+            ptr = tmp;
+        }
+
         SR_LOG_DBG("Found %zu instances of %s , will request %s", xp_cnt, xp, ptr);
 
         size_t suffix_len = strlen(ptr);

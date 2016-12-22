@@ -108,8 +108,8 @@ public:
     virtual int rpc_tree(const char *, S_Trees , S_Trees_Holder , void *) {return SR_ERR_OK;};
     virtual int action_tree(const char *, S_Trees , S_Trees_Holder , void *) {return SR_ERR_OK;};
     virtual int dp_get_items(const char *, S_Vals_Holder , void *) {return SR_ERR_OK;};
-    virtual void event_notif(const char *, S_Vals , time_t , void *) {return;};
-    virtual void event_notif_tree(const char *, S_Trees , time_t , void *) {return;};
+    virtual void event_notif(const sr_ev_notif_type_t&, const char *, S_Vals , time_t , void *) {return;};
+    virtual void event_notif_tree(const sr_ev_notif_type_t&, const char *, S_Trees , time_t , void *) {return;};
 
     Callback *get() {return this;};
 

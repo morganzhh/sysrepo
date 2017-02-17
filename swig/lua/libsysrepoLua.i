@@ -114,7 +114,7 @@ public:
         Vals_Holder *out_vals =(Vals_Holder *)new Vals_Holder(output, output_cnt);
         lua_pushstring(fn.L, xpath);
         SWIG_NewPointerObj(fn.L, in_vals, SWIGTYPE_p_Vals, 0);
-        SWIG_NewPointerObj(fn.L, out_vals, SWIGTYPE_p_Vals, 0);
+        SWIG_NewPointerObj(fn.L, out_vals, SWIGTYPE_p_Vals_Holder, 0);
         SWIG_NewPointerObj(fn.L, private_ctx, SWIGTYPE_p_void, 0);
         lua_call(fn.L, 4, 1);
         in_vals->~Vals();
@@ -136,7 +136,7 @@ public:
         Vals_Holder *out_vals =(Vals_Holder *)new Vals_Holder(output, output_cnt);
         lua_pushstring(fn.L, xpath);
         SWIG_NewPointerObj(fn.L, in_vals, SWIGTYPE_p_Vals, 0);
-        SWIG_NewPointerObj(fn.L, out_vals, SWIGTYPE_p_Vals, 0);
+        SWIG_NewPointerObj(fn.L, out_vals, SWIGTYPE_p_Vals_Holder, 0);
         SWIG_NewPointerObj(fn.L, private_ctx, SWIGTYPE_p_void, 0);
         lua_call(fn.L, 4, 1);
         in_vals->~Vals();
@@ -158,7 +158,7 @@ public:
         Trees_Holder *out_vals =(Trees_Holder *)new Trees_Holder(output, output_cnt);
         lua_pushstring(fn.L, xpath);
         SWIG_NewPointerObj(fn.L, in_vals, SWIGTYPE_p_Trees, 0);
-        SWIG_NewPointerObj(fn.L, out_vals, SWIGTYPE_p_Trees, 0);
+        SWIG_NewPointerObj(fn.L, out_vals, SWIGTYPE_p_Trees_Holder, 0);
         SWIG_NewPointerObj(fn.L, private_ctx, SWIGTYPE_p_void, 0);
         lua_call(fn.L, 4, 1);
         in_vals->~Trees();
@@ -180,7 +180,7 @@ public:
         Trees_Holder *out_vals =(Trees_Holder *)new Trees_Holder(output, output_cnt);
         lua_pushstring(fn.L, xpath);
         SWIG_NewPointerObj(fn.L, in_vals, SWIGTYPE_p_Trees, 0);
-        SWIG_NewPointerObj(fn.L, out_vals, SWIGTYPE_p_Trees, 0);
+        SWIG_NewPointerObj(fn.L, out_vals, SWIGTYPE_p_Trees_Holder, 0);
         SWIG_NewPointerObj(fn.L, private_ctx, SWIGTYPE_p_void, 0);
         lua_call(fn.L, 4, 1);
         in_vals->~Trees();
@@ -197,12 +197,12 @@ public:
         if (!lua_isfunction(fn.L,-1)) {
             throw std::runtime_error("Lua error in function callback");
         }
-        Vals *in_vals =(Vals *)new Vals(values, values_cnt, NULL);
+        Vals_Holder *out_vals =(Vals_Holder *)new Vals_Holder(values, values_cnt);
         lua_pushstring(fn.L, xpath);
-        SWIG_NewPointerObj(fn.L, in_vals, SWIGTYPE_p_Vals, 0);
+        SWIG_NewPointerObj(fn.L, out_vals, SWIGTYPE_p_Vals_Holder, 0);
         SWIG_NewPointerObj(fn.L, private_ctx, SWIGTYPE_p_void, 0);
         lua_call(fn.L, 3, 1);
-        in_vals->~Vals();
+        out_vals->~Vals_Holder();
         if (!lua_isnumber(fn.L, -1))
             throw std::runtime_error("Lua function must return a sysrepo error code (number)");
         int ret = lua_tonumber(fn.L, -1);
@@ -210,32 +210,34 @@ public:
         return ret;
     }
 
-    void event_notif(const char *xpath, const sr_val_t *values, const size_t values_cnt, time_t timestamp, void *private_ctx) {
+    void event_notif(const sr_ev_notif_type_t notif_type, const char *xpath, const sr_val_t *values, const size_t values_cnt, time_t timestamp, void *private_ctx) {
         swiglua_ref_get(&fn);
         if (!lua_isfunction(fn.L,-1)) {
             throw std::runtime_error("Lua error in function callback");
         }
         Vals *in_vals =(Vals *)new Vals(values, values_cnt, NULL);
+        lua_pushnumber(fn.L, (lua_Number)(int)(notif_type));
         lua_pushstring(fn.L, xpath);
         SWIG_NewPointerObj(fn.L, in_vals, SWIGTYPE_p_Vals, 0);
         lua_pushnumber(fn.L, timestamp);
         SWIG_NewPointerObj(fn.L, private_ctx, SWIGTYPE_p_void, 0);
-        lua_call(fn.L, 4, 0);
+        lua_call(fn.L, 5, 0);
         in_vals->~Vals();
     }
 
-    void event_notif_tree(const char *xpath, const sr_node_t *trees, const size_t tree_cnt, time_t timestamp, void *private_ctx) {
+    void event_notif_tree(const sr_ev_notif_type_t notif_type, const char *xpath, const sr_node_t *trees, const size_t tree_cnt, time_t timestamp, void *private_ctx) {
 
         swiglua_ref_get(&fn);
         if (!lua_isfunction(fn.L,-1)) {
             throw std::runtime_error("Lua error in function callback");
         }
         Trees *in_vals =(Trees *)new Trees(trees, tree_cnt, NULL);
+        lua_pushnumber(fn.L, (lua_Number)(int)(notif_type));
         lua_pushstring(fn.L, xpath);
         SWIG_NewPointerObj(fn.L, in_vals, SWIGTYPE_p_Trees, 0);
         lua_pushnumber(fn.L, timestamp);
         SWIG_NewPointerObj(fn.L, private_ctx, SWIGTYPE_p_void, 0);
-        lua_call(fn.L, 4, 0);
+        lua_call(fn.L, 5, 0);
         in_vals->~Trees();
     }
 
@@ -306,16 +308,16 @@ static int g_dp_get_items_cb(const char *xpath, sr_val_t **values, size_t *value
     return ctx->dp_get_items(xpath, values, values_cnt, ctx->private_ctx);
 }
 
-static void g_event_notif_cb(const char *xpath, const sr_val_t *values, const size_t values_cnt, time_t timestamp, void *private_ctx)
+static void g_event_notif_cb(const sr_ev_notif_type_t notif_type, const char *xpath, const sr_val_t *values, const size_t values_cnt, time_t timestamp, void *private_ctx)
 {
     Wrap_cb *ctx = (Wrap_cb *) private_ctx;
-    ctx->event_notif(xpath, values, values_cnt, timestamp, ctx->private_ctx);
+    ctx->event_notif(notif_type, xpath, values, values_cnt, timestamp, ctx->private_ctx);
 }
 
-static void g_event_notif_tree_cb(const char *xpath, const sr_node_t *trees, const size_t tree_cnt, time_t timestamp, void *private_ctx)
+static void g_event_notif_tree_cb(const sr_ev_notif_type_t notif_type, const char *xpath, const sr_node_t *trees, const size_t tree_cnt, time_t timestamp, void *private_ctx)
 {
     Wrap_cb *ctx = (Wrap_cb *) private_ctx;
-    ctx->event_notif_tree(xpath, trees, tree_cnt, timestamp, ctx->private_ctx);
+    ctx->event_notif_tree(notif_type, xpath, trees, tree_cnt, timestamp, ctx->private_ctx);
 }
 
 
@@ -347,14 +349,11 @@ static void global_loop() {
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_module_change_subscribe(self->swig_sess->get(), module_name, g_module_change_subscribe_cb, \
-                                             class_ctx, priority, opts, &self->swig_sub);
+        int ret = sr_module_change_subscribe(self->swig_sess(), module_name, g_module_change_subscribe_cb, \
+                                             class_ctx, priority, opts, self->swig_sub());
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
         }
@@ -367,14 +366,11 @@ static void global_loop() {
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_subtree_change_subscribe(self->swig_sess->get(), xpath, g_subtree_change_cb, class_ctx,\
-                                              priority, opts, &self->swig_sub);
+        int ret = sr_subtree_change_subscribe(self->swig_sess(), xpath, g_subtree_change_cb, class_ctx,\
+                                              priority, opts, self->swig_sub());
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
         }
@@ -387,14 +383,11 @@ static void global_loop() {
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret =  sr_module_install_subscribe(self->swig_sess->get(), g_module_install_cb, class_ctx,
-                                               opts, &self->swig_sub);
+        int ret =  sr_module_install_subscribe(self->swig_sess(), g_module_install_cb, class_ctx,
+                                               opts, self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
@@ -408,14 +401,11 @@ static void global_loop() {
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_feature_enable_subscribe(self->swig_sess->get(), g_feature_enable_cb, class_ctx,
-                                              opts, &self->swig_sub);
+        int ret = sr_feature_enable_subscribe(self->swig_sess(), g_feature_enable_cb, class_ctx,
+                                              opts, self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
@@ -428,14 +418,11 @@ static void global_loop() {
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_rpc_subscribe(self->swig_sess->get(), xpath, g_rpc_cb, class_ctx, opts,\
-                                   &self->swig_sub);
+        int ret = sr_rpc_subscribe(self->swig_sess(), xpath, g_rpc_cb, class_ctx, opts,\
+                                   self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
@@ -448,14 +435,11 @@ static void global_loop() {
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_action_subscribe(self->swig_sess->get(), xpath, g_action_cb, class_ctx, opts,\
-                                   &self->swig_sub);
+        int ret = sr_action_subscribe(self->swig_sess(), xpath, g_action_cb, class_ctx, opts,\
+                                   self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
@@ -468,14 +452,11 @@ static void global_loop() {
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_rpc_subscribe_tree(self->swig_sess->get(), xpath, g_rpc_tree_cb, class_ctx, opts,\
-                                   &self->swig_sub);
+        int ret = sr_rpc_subscribe_tree(self->swig_sess(), xpath, g_rpc_tree_cb, class_ctx, opts,\
+                                   self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
@@ -488,14 +469,11 @@ static void global_loop() {
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_action_subscribe_tree(self->swig_sess->get(), xpath, g_action_tree_cb, class_ctx, opts,\
-                                   &self->swig_sub);
+        int ret = sr_action_subscribe_tree(self->swig_sess(), xpath, g_action_tree_cb, class_ctx, opts,\
+                                   self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
@@ -508,14 +486,11 @@ static void global_loop() {
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_event_notif_subscribe(self->swig_sess->get(), xpath, g_event_notif_cb, class_ctx, opts,\
-                                   &self->swig_sub);
+        int ret = sr_event_notif_subscribe(self->swig_sess(), xpath, g_event_notif_cb, class_ctx, opts,\
+                                   self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
@@ -528,14 +503,11 @@ static void global_loop() {
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_event_notif_subscribe_tree(self->swig_sess->get(), xpath, g_event_notif_tree_cb,\
-                                                class_ctx, opts, &self->swig_sub);
+        int ret = sr_event_notif_subscribe_tree(self->swig_sess(), xpath, g_event_notif_tree_cb,\
+                                                class_ctx, opts, self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
@@ -548,14 +520,11 @@ static void global_loop() {
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_dp_get_items_subscribe(self->swig_sess->get(), xpath, g_dp_get_items_cb, class_ctx,\
-                                            opts, &self->swig_sub);
+        int ret = sr_dp_get_items_subscribe(self->swig_sess(), xpath, g_dp_get_items_cb, class_ctx,\
+                                            opts, self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));

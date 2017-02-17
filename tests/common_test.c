@@ -33,6 +33,7 @@
 #include "sr_common.h"
 #include "request_processor.h"
 #include "test_data.h"
+#include "system_helper.h"
 
 static int
 logging_setup(void **state)
@@ -200,6 +201,113 @@ sr_list_test(void **state)
     assert_int_equal(rc, SR_ERR_INVAL_ARG);
 
     sr_list_cleanup(list);
+}
+
+
+static int
+sr_my_strcmp(void *a, void *b)
+{
+    int result = strcmp(a, b);
+    if (result < 0) {
+        return -1;
+    } else if (result > 0) {
+        return 1;
+    } else {
+        return 0;
+    }
+
+}
+/*
+ * Tests sysrepo list with ordering.
+ */
+static void
+sr_ordered_list_test(void **state)
+{
+    sr_list_t *list = NULL;
+    int rc = SR_ERR_OK;
+    char *item = NULL;
+    bool inserted = false;
+
+    rc = sr_list_init(&list);
+    assert_int_equal(rc, SR_ERR_OK);
+
+    item = strdup("b");
+    assert_non_null(item);
+
+    rc = sr_list_insert_unique_ord(list, item, sr_my_strcmp, &inserted);
+    assert_int_equal(rc, SR_ERR_OK);
+    assert_true(inserted);
+
+    item = strdup("a");
+    assert_non_null(item);
+
+    rc = sr_list_insert_unique_ord(list, item, sr_my_strcmp, &inserted);
+    assert_int_equal(rc, SR_ERR_OK);
+    assert_true(inserted);
+
+    /* try to insert duplicate */
+    item = strdup("a");
+    assert_non_null(item);
+
+    rc = sr_list_insert_unique_ord(list, item, sr_my_strcmp, &inserted);
+    assert_int_equal(rc, SR_ERR_OK);
+    assert_false(inserted);
+    free(item);
+
+    item = strdup("c");
+    assert_non_null(item);
+
+    rc = sr_list_insert_unique_ord(list, item, sr_my_strcmp, &inserted);
+    assert_int_equal(rc, SR_ERR_OK);
+    assert_true(inserted);
+
+    item = strdup("f");
+    assert_non_null(item);
+
+    rc = sr_list_insert_unique_ord(list, item, sr_my_strcmp, &inserted);
+    assert_int_equal(rc, SR_ERR_OK);
+    assert_true(inserted);
+
+    item = strdup("g");
+    assert_non_null(item);
+
+    rc = sr_list_insert_unique_ord(list, item, sr_my_strcmp, &inserted);
+    assert_int_equal(rc, SR_ERR_OK);
+    assert_true(inserted);
+
+    item = strdup("d");
+    assert_non_null(item);
+
+    rc = sr_list_insert_unique_ord(list, item, sr_my_strcmp, &inserted);
+    assert_int_equal(rc, SR_ERR_OK);
+    assert_true(inserted);
+
+    /* check the ordering */
+    assert_string_equal("a", list->data[0]);
+    assert_string_equal("b", list->data[1]);
+    assert_string_equal("c", list->data[2]);
+    assert_string_equal("d", list->data[3]);
+    assert_string_equal("f", list->data[4]);
+    assert_string_equal("g", list->data[5]);
+
+    /* remove the first element */
+    free(list->data[0]);
+    rc = sr_list_rm_at(list, 0);
+    assert_int_equal(rc, SR_ERR_OK);
+
+    /* insert it back*/
+    item = strdup("a");
+    assert_non_null(item);
+
+    rc = sr_list_insert_unique_ord(list, item, sr_my_strcmp, &inserted);
+    assert_int_equal(rc, SR_ERR_OK);
+    assert_true(inserted);
+
+    assert_string_equal("a", list->data[0]);
+    assert_string_equal("b", list->data[1]);
+    assert_string_equal("c", list->data[2]);
+
+    sr_free_list_of_strings(list);
 }
 
 /*
@@ -1356,7 +1464,7 @@ sr_get_system_groups_test(void **state)
     uid = geteuid();
     pw = getpwuid(uid);
     if (pw) {
-         assert_int_equal(SR_ERR_OK, sr_get_system_groups(pw->pw_name, &groups, &group_cnt));
+         assert_int_equal(SR_ERR_OK, sr_get_user_groups(pw->pw_name, &groups, &group_cnt));
          for (size_t i = 0; i < group_cnt; ++i) {
              assert_non_null(groups[i]);
              assert_true(0 < strlen(groups[i]));
@@ -1372,22 +1480,54 @@ sr_free_list_of_strings_test(void **state)
 {
     int rc = SR_ERR_OK;
     sr_list_t *list = NULL;
-    
+
     sr_free_list_of_strings(list);
-    
+
     rc = sr_list_init(&list);
     assert_int_equal(SR_ERR_OK, rc);
-    
+
     rc = sr_list_add(list, strdup("abc"));
     assert_int_equal(SR_ERR_OK, rc);
-    
+
     rc = sr_list_add(list, strdup("def"));
     assert_int_equal(SR_ERR_OK, rc);
-    
+
     rc = sr_list_add(list, strdup("ghi"));
     assert_int_equal(SR_ERR_OK, rc);
-    
+
     sr_free_list_of_strings(list);
+}
+
+static void
+sr_dup_data_tree_to_ctx_test(void **state)
+{
+    struct ly_ctx *ctx_A = ly_ctx_new(TEST_SCHEMA_SEARCH_DIR);
+    struct ly_ctx *ctx_B = ly_ctx_new(TEST_SCHEMA_SEARCH_DIR);
+    struct lyd_node *data_tree_A = NULL, *data_tree_B = NULL;
+
+    ly_ctx_load_module(ctx_A, "test-module", NULL);
+    ly_ctx_load_module(ctx_B, "test-module", NULL);
+
+    /* duplicate NULL data tree */
+    data_tree_B = sr_dup_datatree_to_ctx(data_tree_A, ctx_B);
+    assert_null(data_tree_B);
+
+    /* create data tree and duplicate it*/
+    data_tree_A = lyd_new_path(NULL, ctx_A, "/test-module:list[key='a']", NULL, 0, 0);
+    lyd_new_path(data_tree_A, ctx_A, "/test-module:list[key='b']", NULL, 0, 0);
+
+    assert_non_null(data_tree_A);
+    assert_non_null(data_tree_A->next);
+
+    data_tree_B = sr_dup_datatree_to_ctx(data_tree_A, ctx_B);
+    assert_non_null(data_tree_B);
+    assert_non_null(data_tree_B->next);
+
+    lyd_free_withsiblings(data_tree_A);
+    lyd_free_withsiblings(data_tree_B);
+
+    ly_ctx_destroy(ctx_A, NULL);
+    ly_ctx_destroy(ctx_B, NULL);
 }
 
 int
@@ -1395,6 +1535,7 @@ main() {
     const struct CMUnitTest tests[] = {
             cmocka_unit_test_setup_teardown(sr_llist_test, logging_setup, logging_cleanup),
             cmocka_unit_test_setup_teardown(sr_list_test, logging_setup, logging_cleanup),
+            cmocka_unit_test_setup_teardown(sr_ordered_list_test, logging_setup, logging_cleanup),
             cmocka_unit_test_setup_teardown(circular_buffer_test1, logging_setup, logging_cleanup),
             cmocka_unit_test_setup_teardown(circular_buffer_test2, logging_setup, logging_cleanup),
             cmocka_unit_test_setup_teardown(circular_buffer_test3, logging_setup, logging_cleanup),
@@ -1411,7 +1552,11 @@ main() {
             cmocka_unit_test_setup_teardown(sr_create_uri_test, logging_setup, logging_cleanup),
             cmocka_unit_test_setup_teardown(sr_get_system_groups_test, logging_setup, logging_cleanup),
             cmocka_unit_test_setup_teardown(sr_free_list_of_strings_test, logging_setup, logging_cleanup),
+            cmocka_unit_test_setup_teardown(sr_dup_data_tree_to_ctx_test, logging_setup, logging_cleanup),
     };
 
-    return cmocka_run_group_tests(tests, NULL, NULL);
+    watchdog_start(300);
+    int ret = cmocka_run_group_tests(tests, NULL, NULL);
+    watchdog_stop();
+    return ret;
 }

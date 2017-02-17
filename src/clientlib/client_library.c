@@ -276,7 +276,7 @@ cleanup:
  */
 static int
 cl_subscription_init(sr_session_ctx_t *session, Sr__SubscriptionType type, const char *module_name,
-        sr_api_variant_t api_variant, void *private_ctx, sr_subscription_ctx_t **sr_subscription_p,
+        sr_api_variant_t api_variant, int opts, void *private_ctx, sr_subscription_ctx_t **sr_subscription_p,
         cl_sm_subscription_ctx_t **sm_subscription_p, Sr__Msg **msg_req_p)
 {
     Sr__Msg *msg_req = NULL;
@@ -314,6 +314,7 @@ cl_subscription_init(sr_session_ctx_t *session, Sr__SubscriptionType type, const
 
     sm_subscription->api_variant = api_variant;
     sm_subscription->type = type;
+    sm_subscription->opts = opts;
     sm_subscription->private_ctx = private_ctx;
     if (NULL != module_name) {
         sm_subscription->module_name = strdup(module_name);
@@ -409,12 +410,12 @@ sr_connect(const char *app_name, const sr_conn_options_t opts, sr_conn_ctx_t **c
                 ret = system("sysrepod");
                 if (0 == ret) {
                     SR_LOG_INF_MSG("Sysrepo daemon has been started.");
-                    rc = cl_socket_connect(connection, SR_DAEMON_SOCKET);
-                    CHECK_RC_LOG_GOTO(rc, cleanup, "Unable to connect to sysrepod: %s.", sr_strerror(rc));
                 } else {
                     SR_LOG_WRN("Unable to start sysrepo daemon, error code=%d.", ret);
-                    goto cleanup;
                 }
+                /* retry to connect again in any case */
+                rc = cl_socket_connect(connection, SR_DAEMON_SOCKET);
+                CHECK_RC_LOG_GOTO(rc, cleanup, "Unable to connect to sysrepod: %s.", sr_strerror(rc));
             } else {
                 SR_LOG_ERR_MSG("Sysrepo daemon not detected while library mode disallowed.");
                 goto cleanup;
@@ -470,6 +471,7 @@ sr_disconnect(sr_conn_ctx_t *conn_ctx)
         connections_cnt--;
         if ((0 == connections_cnt) && (NULL != local_cm_ctx)) {
             /* destroy local sysrepo engine */
+            cm_before_cleanup(local_cm_ctx);
             cm_stop(local_cm_ctx);
             cm_cleanup(local_cm_ctx);
             local_cm_ctx = NULL;
@@ -598,7 +600,7 @@ sr_session_refresh(sr_session_ctx_t *session)
 
     cl_session_clear_errors(session);
 
-    /* prepare session_stop message */
+    /* prepare session_refresh message */
     rc = sr_mem_new(0, &sr_mem);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to create a new Sysrepo memory context.");
     rc = sr_gpb_req_alloc(sr_mem, SR__OPERATION__SESSION_REFRESH, session->id, &msg_req);
@@ -606,6 +608,44 @@ sr_session_refresh(sr_session_ctx_t *session)
 
     /* send the request and receive the response */
     rc = cl_request_process(session, msg_req, &msg_resp, NULL, SR__OPERATION__SESSION_REFRESH);
+    CHECK_RC_MSG_GOTO(rc, cleanup, "Error by processing of the request.");
+
+    sr_msg_free(msg_req);
+    sr_msg_free(msg_resp);
+
+    return cl_session_return(session, SR_ERR_OK);
+
+cleanup:
+    if (NULL != msg_req) {
+        sr_msg_free(msg_req);
+    } else {
+        sr_mem_free(sr_mem);
+    }
+    if (NULL != msg_resp) {
+        sr_msg_free(msg_resp);
+    }
+    return cl_session_return(session, rc);
+}
+
+int
+sr_session_check(sr_session_ctx_t *session)
+{
+    Sr__Msg *msg_req = NULL, *msg_resp = NULL;
+    sr_mem_ctx_t *sr_mem = NULL;
+    int rc = SR_ERR_OK;
+
+    CHECK_NULL_ARG2(session, session->conn_ctx);
+
+    cl_session_clear_errors(session);
+
+    /* prepare session_check message */
+    rc = sr_mem_new(0, &sr_mem);
+    CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to create a new Sysrepo memory context.");
+    rc = sr_gpb_req_alloc(sr_mem, SR__OPERATION__SESSION_CHECK, session->id, &msg_req);
+    CHECK_RC_MSG_GOTO(rc, cleanup, "Cannot allocate GPB message.");
+
+    /* send the request and receive the response */
+    rc = cl_request_process(session, msg_req, &msg_resp, NULL, SR__OPERATION__SESSION_CHECK);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Error by processing of the request.");
 
     sr_msg_free(msg_req);
@@ -704,6 +744,16 @@ cleanup:
 
 }
 
+uint32_t
+sr_session_get_id(sr_session_ctx_t *session)
+{
+    if (NULL != session) {
+        return session->id;
+    } else {
+        SR_LOG_ERR_MSG("NULL passed to session argument");
+        return 0;
+    }
+}
 int
 sr_list_schemas(sr_session_ctx_t *session, sr_schema_t **schemas, size_t *schema_cnt)
 {
@@ -779,6 +829,60 @@ sr_get_schema(sr_session_ctx_t *session, const char *module_name, const char *mo
     if(NULL != module_revision) {
         sr_mem_edit_string(sr_mem, &msg_req->request->get_schema_req->revision, module_revision);
         CHECK_NULL_NOMEM_GOTO(msg_req->request->get_schema_req->revision, rc, cleanup);
+    }
+    msg_req->request->get_schema_req->yang_format = (format == SR_SCHEMA_YANG);
+
+    /* send the request and receive the response */
+    rc = cl_request_process(session, msg_req, &msg_resp, NULL, SR__OPERATION__GET_SCHEMA);
+    CHECK_RC_MSG_GOTO(rc, cleanup, "Error by processing of the request.");
+
+    /* copy schema content */
+    if (NULL != msg_resp->response->get_schema_resp->schema_content) {
+        *schema_content = strdup(msg_resp->response->get_schema_resp->schema_content);
+        CHECK_NULL_NOMEM_GOTO(*schema_content, rc, cleanup);
+    }
+
+    sr_msg_free(msg_req);
+    sr_msg_free(msg_resp);
+
+    return cl_session_return(session, SR_ERR_OK);
+
+cleanup:
+    if (NULL != msg_req) {
+        sr_msg_free(msg_req);
+    } else {
+        sr_mem_free(sr_mem);
+    }
+    if (NULL != msg_resp) {
+        sr_msg_free(msg_resp);
+    }
+    return cl_session_return(session, rc);
+}
+
+int
+sr_get_submodule_schema(sr_session_ctx_t *session, const char *submodule_name, const char *submodule_revision,
+                        sr_schema_format_t format, char **schema_content)
+{
+    Sr__Msg *msg_req = NULL, *msg_resp = NULL;
+    sr_mem_ctx_t *sr_mem = NULL;
+    int rc = SR_ERR_OK;
+
+    CHECK_NULL_ARG4(session, session->conn_ctx, submodule_name, schema_content);
+
+    cl_session_clear_errors(session);
+
+    /* prepare get_schema message */
+    rc = sr_mem_new(0, &sr_mem);
+    CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to create a new Sysrepo memory context.");
+    rc = sr_gpb_req_alloc(sr_mem, SR__OPERATION__GET_SCHEMA, session->id, &msg_req);
+    CHECK_RC_MSG_GOTO(rc, cleanup, "Cannot allocate GPB message.");
+
+    /* set arguments */
+    sr_mem_edit_string(sr_mem, &msg_req->request->get_schema_req->submodule_name, submodule_name);
+    CHECK_NULL_NOMEM_GOTO(msg_req->request->get_schema_req->submodule_name, rc, cleanup);
+    if (NULL != submodule_revision) {
+        sr_mem_edit_string(sr_mem, &msg_req->request->get_schema_req->submodule_revision, submodule_revision);
+        CHECK_NULL_NOMEM_GOTO(msg_req->request->get_schema_req->submodule_revision, rc, cleanup);
     }
     msg_req->request->get_schema_req->yang_format = (format == SR_SCHEMA_YANG);
 
@@ -1967,13 +2071,14 @@ sr_commit(sr_session_ctx_t *session)
 
     /* send the request and receive the response */
     rc = cl_request_process(session, msg_req, &msg_resp, NULL, SR__OPERATION__COMMIT);
-    if ((SR_ERR_OK != rc) && (SR_ERR_OPERATION_FAILED != rc)) {
+    if ((SR_ERR_OK != rc) && (SR_ERR_OPERATION_FAILED != rc) && (SR_ERR_VALIDATION_FAILED != rc) &&
+        (SR_ERR_UNAUTHORIZED != rc)) {
         SR_LOG_ERR_MSG("Error by processing of commit request.");
         goto cleanup;
     }
 
     commit_resp = msg_resp->response->commit_resp;
-    if (SR_ERR_OPERATION_FAILED == rc) {
+    if ((SR_ERR_OPERATION_FAILED == rc) || (SR_ERR_VALIDATION_FAILED == rc) || (SR_ERR_UNAUTHORIZED == rc)) {
         SR_LOG_ERR("Commit operation failed with %zu error(s).", commit_resp->n_errors);
 
         /* store commit errors within the session */
@@ -2267,7 +2372,7 @@ sr_module_install_subscribe(sr_session_ctx_t *session, sr_module_install_cb call
     if (opts & SR_SUBSCR_CTX_REUSE) {
         sr_subscription = *subscription_p;
     }
-    rc = cl_subscription_init(session, SR__SUBSCRIPTION_TYPE__MODULE_INSTALL_SUBS, NULL, SR_API_VALUES,
+    rc = cl_subscription_init(session, SR__SUBSCRIPTION_TYPE__MODULE_INSTALL_SUBS, NULL, SR_API_VALUES, opts,
             private_ctx, &sr_subscription, &sm_subscription, &msg_req);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Error by initialization of the subscription in the client library.");
 
@@ -2315,7 +2420,7 @@ sr_feature_enable_subscribe(sr_session_ctx_t *session, sr_feature_enable_cb call
     if (opts & SR_SUBSCR_CTX_REUSE) {
         sr_subscription = *subscription_p;
     }
-    rc = cl_subscription_init(session, SR__SUBSCRIPTION_TYPE__FEATURE_ENABLE_SUBS, NULL, SR_API_VALUES,
+    rc = cl_subscription_init(session, SR__SUBSCRIPTION_TYPE__FEATURE_ENABLE_SUBS, NULL, SR_API_VALUES, opts,
             private_ctx, &sr_subscription, &sm_subscription, &msg_req);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Error by initialization of the subscription in the client library.");
 
@@ -2408,15 +2513,11 @@ sr_module_change_subscribe(sr_session_ctx_t *session, const char *module_name, s
     if (opts & SR_SUBSCR_CTX_REUSE) {
         sr_subscription = *subscription_p;
     }
-    rc = cl_subscription_init(session, SR__SUBSCRIPTION_TYPE__MODULE_CHANGE_SUBS, module_name, SR_API_VALUES,
+    rc = cl_subscription_init(session, SR__SUBSCRIPTION_TYPE__MODULE_CHANGE_SUBS, module_name, SR_API_VALUES, opts,
             private_ctx, &sr_subscription, &sm_subscription, &msg_req);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Error by initialization of the subscription in the client library.");
 
     sm_subscription->callback.module_change_cb = callback;
-
-    if (opts & SR_SUBSCR_NO_ABORT_FOR_REFUSED_CFG) {
-        sm_subscription->dont_send_abort_on_failure = true;
-    }
 
     /* fill-in subscription details */
     sr_mem = (sr_mem_ctx_t *)msg_req->_sysrepo_mem_ctx;
@@ -2483,15 +2584,11 @@ sr_subtree_change_subscribe(sr_session_ctx_t *session, const char *xpath, sr_sub
     if (opts & SR_SUBSCR_CTX_REUSE) {
         sr_subscription = *subscription_p;
     }
-    rc = cl_subscription_init(session, SR__SUBSCRIPTION_TYPE__SUBTREE_CHANGE_SUBS, module_name, SR_API_VALUES,
+    rc = cl_subscription_init(session, SR__SUBSCRIPTION_TYPE__SUBTREE_CHANGE_SUBS, module_name, SR_API_VALUES, opts,
             private_ctx, &sr_subscription, &sm_subscription, &msg_req);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Error by initialization of the subscription in the client library.");
 
     sm_subscription->callback.subtree_change_cb = callback;
-
-    if (opts & SR_SUBSCR_NO_ABORT_FOR_REFUSED_CFG) {
-        sm_subscription->dont_send_abort_on_failure = true;
-    }
 
     /* fill-in subscription details */
     sr_mem = (sr_mem_ctx_t *)msg_req->_sysrepo_mem_ctx;
@@ -2862,6 +2959,50 @@ cleanup:
     return cl_session_return(session, rc);
 }
 
+int
+sr_check_exec_permission(sr_session_ctx_t *session, const char *xpath, bool *permitted)
+{
+    Sr__Msg *msg_req = NULL, *msg_resp = NULL;
+    sr_mem_ctx_t *sr_mem = NULL;
+    int rc = SR_ERR_OK;
+
+    CHECK_NULL_ARG4(session, session->conn_ctx, xpath, permitted);
+
+    cl_session_clear_errors(session);
+
+    /* prepare check-exec-perm message */
+    rc = sr_mem_new(0, &sr_mem);
+    CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to create a new Sysrepo memory context.");
+    rc = sr_gpb_req_alloc(sr_mem, SR__OPERATION__CHECK_EXEC_PERMISSION, session->id, &msg_req);
+    CHECK_RC_MSG_GOTO(rc, cleanup, "Cannot allocate GPB message.");
+
+    /* set arguments */
+    sr_mem_edit_string(sr_mem, &msg_req->request->check_exec_perm_req->xpath, xpath);
+    CHECK_NULL_NOMEM_GOTO(msg_req->request->check_exec_perm_req->xpath, rc, cleanup);
+
+    /* send the request and receive the response */
+    rc = cl_request_process(session, msg_req, &msg_resp, NULL, SR__OPERATION__CHECK_EXEC_PERMISSION);
+    CHECK_RC_MSG_GOTO(rc, cleanup, "Error by processing of the request.");
+
+    *permitted = msg_resp->response->check_exec_perm_resp->permitted;
+
+    sr_msg_free(msg_req);
+    sr_msg_free(msg_resp);
+
+    return cl_session_return(session, SR_ERR_OK);
+
+cleanup:
+    if (NULL != msg_req) {
+        sr_msg_free(msg_req);
+    } else {
+        sr_mem_free(sr_mem);
+    }
+    if (NULL != msg_resp) {
+        sr_msg_free(msg_resp);
+    }
+    return cl_session_return(session, rc);
+}
+
 /**
  * @brief Subscribes for delivery of RPC specified by xpath.
  *
@@ -2901,7 +3042,7 @@ cl_rpc_subscribe(sr_api_variant_t api_variant, sr_session_ctx_t *session, const 
     if (opts & SR_SUBSCR_CTX_REUSE) {
         sr_subscription = *subscription_p;
     }
-    rc = cl_subscription_init(session, SR__SUBSCRIPTION_TYPE__RPC_SUBS, module_name, api_variant,
+    rc = cl_subscription_init(session, SR__SUBSCRIPTION_TYPE__RPC_SUBS, module_name, api_variant, opts,
             private_ctx, &sr_subscription, &sm_subscription, &msg_req);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Error by initialization of the subscription in the client library.");
 
@@ -3174,7 +3315,7 @@ cl_action_subscribe(sr_api_variant_t api_variant, sr_session_ctx_t *session, con
     if (opts & SR_SUBSCR_CTX_REUSE) {
         sr_subscription = *subscription_p;
     }
-    rc = cl_subscription_init(session, SR__SUBSCRIPTION_TYPE__ACTION_SUBS, module_name, api_variant,
+    rc = cl_subscription_init(session, SR__SUBSCRIPTION_TYPE__ACTION_SUBS, module_name, api_variant, opts,
             private_ctx, &sr_subscription, &sm_subscription, &msg_req);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Error by initialization of the subscription in the client library.");
 
@@ -3270,7 +3411,7 @@ sr_dp_get_items_subscribe(sr_session_ctx_t *session, const char *xpath, sr_dp_ge
     if (opts & SR_SUBSCR_CTX_REUSE) {
         sr_subscription = *subscription_p;
     }
-    rc = cl_subscription_init(session, SR__SUBSCRIPTION_TYPE__DP_GET_ITEMS_SUBS, module_name, SR_API_VALUES,
+    rc = cl_subscription_init(session, SR__SUBSCRIPTION_TYPE__DP_GET_ITEMS_SUBS, module_name, SR_API_VALUES, opts,
             private_ctx, &sr_subscription, &sm_subscription, &msg_req);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Error by initialization of the subscription in the client library.");
 
@@ -3353,7 +3494,7 @@ cl_event_notif_subscribe(sr_api_variant_t api_variant, sr_session_ctx_t *session
     if (opts & SR_SUBSCR_CTX_REUSE) {
         sr_subscription = *subscription_p;
     }
-    rc = cl_subscription_init(session, SR__SUBSCRIPTION_TYPE__EVENT_NOTIF_SUBS, module_name, api_variant,
+    rc = cl_subscription_init(session, SR__SUBSCRIPTION_TYPE__EVENT_NOTIF_SUBS, module_name, api_variant, opts,
             private_ctx, &sr_subscription, &sm_subscription, &msg_req);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Error by initialization of the subscription in the client library.");
 
@@ -3418,8 +3559,8 @@ sr_event_notif_subscribe_tree(sr_session_ctx_t *session, const char *xpath,
 }
 
 int
-sr_event_notif_send(sr_session_ctx_t *session, const char *xpath,
-        const sr_val_t *values,  const size_t values_cnt)
+sr_event_notif_send(sr_session_ctx_t *session, const char *xpath, const sr_val_t *values, const size_t values_cnt,
+        sr_ev_notif_flag_t opts)
 {
     Sr__Msg *msg_req = NULL, *msg_resp = NULL;
     sr_mem_ctx_t *sr_mem = NULL;
@@ -3441,6 +3582,7 @@ sr_event_notif_send(sr_session_ctx_t *session, const char *xpath,
 
     /* set arguments */
     msg_req->request->event_notif_req->type = SR__EVENT_NOTIF_REQ__NOTIF_TYPE__REALTIME;
+    msg_req->request->event_notif_req->options = opts;
     sr_mem_edit_string(sr_mem, &msg_req->request->event_notif_req->xpath, xpath);
     CHECK_NULL_NOMEM_GOTO(msg_req->request->event_notif_req->xpath, rc, cleanup);
 
@@ -3478,8 +3620,8 @@ cleanup:
 }
 
 int
-sr_event_notif_send_tree(sr_session_ctx_t *session, const char *xpath,
-        const sr_node_t *trees,  const size_t tree_cnt)
+sr_event_notif_send_tree(sr_session_ctx_t *session, const char *xpath, const sr_node_t *trees,  const size_t tree_cnt,
+        sr_ev_notif_flag_t opts)
 {
     Sr__Msg *msg_req = NULL, *msg_resp = NULL;
     sr_mem_ctx_t *sr_mem = NULL;
@@ -3501,6 +3643,7 @@ sr_event_notif_send_tree(sr_session_ctx_t *session, const char *xpath,
 
     /* set arguments */
     msg_req->request->event_notif_req->type = SR__EVENT_NOTIF_REQ__NOTIF_TYPE__REALTIME;
+    msg_req->request->event_notif_req->options = opts;
     sr_mem_edit_string(sr_mem, &msg_req->request->event_notif_req->xpath, xpath);
     CHECK_NULL_NOMEM_GOTO(msg_req->request->event_notif_req->xpath, rc, cleanup);
 
@@ -3550,9 +3693,6 @@ sr_event_notif_replay(sr_session_ctx_t *session, sr_subscription_ctx_t *subscrip
 
     cl_session_clear_errors(session);
 
-    rc = sr_mem_new(0, &sr_mem);
-    CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to create a new Sysrepo memory context.");
-
     for (size_t i = 0; i < subscription->sm_subscription_cnt; i++) {
         sm_subscription = subscription->sm_subscriptions[i];
 
@@ -3560,6 +3700,9 @@ sr_event_notif_replay(sr_session_ctx_t *session, sr_subscription_ctx_t *subscrip
             /* only event notification subscriptions */
             continue;
         }
+
+        rc = sr_mem_new(0, &sr_mem);
+        CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to create a new Sysrepo memory context.");
 
         /* prepare event-notification message */
         rc = sr_gpb_req_alloc(sr_mem, SR__OPERATION__EVENT_NOTIF_REPLAY, session->id, &msg_req);

@@ -46,6 +46,9 @@ typedef struct rp_ctx_s {
     size_t thread_spin_limit;                /**< Current limit of thread spinning before going to sleep. */
     bool stop_requested;                     /**< Stopping of all threads has been requested. */
 
+    bool block_further_commits;              /**< Flag that allows commit to be processed */
+    pthread_mutex_t commit_block_mutex;      /**< Mutex guarding block_further_commits flag */
+
     sr_cbuff_t *request_queue;               /**< Input request queue. */
     pthread_mutex_t request_queue_mutex;     /**< Request queue mutex. */
     pthread_cond_t request_queue_cv;         /**< Request queue condition variable. */
@@ -55,6 +58,7 @@ typedef struct rp_ctx_s {
     sr_list_t *inter_op_data_xpath;          /**< List of list containing subtree of the module that are handled by sysrepo */
 
     pthread_rwlock_t commit_lock;            /**< Lock to synchronize commit in this instance */
+    bool do_not_generate_config_change;      /**< Config-change notification will not be generated */
 } rp_ctx_t;
 
 /**
@@ -82,6 +86,7 @@ typedef struct rp_dt_change_ctx_s {
 typedef enum rp_request_state_e {
     RP_REQ_NEW,                         /**< New request received in RP */
     RP_REQ_WAITING_FOR_DATA,            /**< Request is waiting for state data from providers */
+    RP_REQ_TIMED_OUT,                   /**< Time out has expired */
     RP_REQ_DATA_LOADED,                 /**< Respones for all state data request were received */
     RP_REQ_WAITING_FOR_VERIFIERS,       /**< Request is waiting for replies from verifiers */
     RP_REQ_RESUMED,                     /**< Replies from verifiers were received or timeout expired */
@@ -89,8 +94,7 @@ typedef enum rp_request_state_e {
 } rp_request_state_t;
 
 typedef struct rp_state_data_ctx_s {
-    np_subscription_t **subscriptions; /**< Array of subscriptions from np for a module */
-    size_t subscription_cnt;           /**< Length of subscriptions array */
+    sr_list_t *subscriptions;          /**< List of subscriptions from np for a module */
     sr_list_t *subtrees;               /**< List of state data subtrees to be loaded*/
     sr_list_t *subtree_nodes;          /**< List of schema nodes corresponding to state data subtrees */
     sr_list_t *subscription_nodes;     /**< Schema node corresponding to the subscriptions */
@@ -116,6 +120,10 @@ typedef struct rp_session_s {
     dm_session_t *dm_session;            /**< Data Manager's session context. */
     rp_dt_get_items_ctx_t get_items_ctx; /**< Context for get_items_iter calls. */
     rp_dt_change_ctx_t change_ctx;       /**< Context for iteration over the changes */
+
+    /* request ID generator */
+    uint64_t total_req_cnt;              /**< Total number of received requests for this session. */
+    pthread_mutex_t total_req_cnt_mutex; /**< Mutex protecting total_req_cnt. */
 
     /* current request - used for data retrieval calls which may need state data */
     rp_request_state_t state;            /**< the state of the request processing used if the operational data are requested */

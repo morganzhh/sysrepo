@@ -6,7 +6,7 @@ include(GNUInstallDirs)
 # setup version
 set(SYSREPO_MAJOR_VERSION 0)
 set(SYSREPO_MINOR_VERSION 5)
-set(SYSREPO_MICRO_VERSION 10)
+set(SYSREPO_MICRO_VERSION 11)
 set(SYSREPO_VERSION ${SYSREPO_MAJOR_VERSION}.${SYSREPO_MINOR_VERSION}.${SYSREPO_MICRO_VERSION})
 
 # setup bindings
@@ -132,28 +132,52 @@ include(CheckStructHasMember)
 CHECK_FUNCTION_EXISTS(pthread_rwlockattr_setkind_np HAVE_PTHREAD_RWLOCKATTR_SETKIND_NP)
 CHECK_FUNCTION_EXISTS(getpeereid HAVE_GETPEEREID)
 CHECK_FUNCTION_EXISTS(getpeerucred HAVE_GETPEERUCRED)
-CHECK_FUNCTION_EXISTS(pthread_mutex_timedlock HAVE_TIMED_LOCK)
 CHECK_INCLUDE_FILES(ucred.h HAVE_UCRED_H)
+CHECK_FUNCTION_EXISTS(pthread_mutex_timedlock HAVE_TIMED_LOCK)
 CHECK_FUNCTION_EXISTS(setfsuid HAVE_SETFSUID)
+CHECK_FUNCTION_EXISTS(fsetxattr HAVE_FSETXATTR)
 CHECK_STRUCT_HAS_MEMBER("struct stat" st_mtim "sys/stat.h" HAVE_STAT_ST_MTIM)
 
 # user options
-set(ENABLE_NACM 1 CACHE BOOL "Enable NETCONF Access Control Model (RFC 6536).")
+set(ENABLE_NACM 1 CACHE BOOL
+    "Enable NETCONF Access Control Model (RFC 6536).")
 
-set(NACM_RECOVERY_UID 0 CACHE INTEGER "Set UID to be used to identify NACM recovery session, default value is 0.")
+set(NACM_RECOVERY_UID 0 CACHE INTEGER
+    "UID to be used to identify NACM recovery session, default value is 0.")
 
-option (USE_SR_MEM_MGMT
-        "Use Sysrepo's own memory management (better overall performance but more difficult to track memory bugs)."
-        ON)
-option (ENABLE_NOTIF_STORE
-        "Enable event notifications store & notifications replay."
-        ON)
+set(ENABLE_NOTIF_STORE 1 CACHE BOOL
+    "Enable event notifications store & notifications replay.")
 
-set(COMMIT_TIMEOUT 10 CACHE INTEGER "Commit operation timeout (in seconds).")
+set(USE_SR_MEM_MGMT 1 CACHE BOOL
+    "Use Sysrepo's own memory management (better overall performance but more difficult to track memory bugs).")
 
-option (LOG_THREAD_ID
-        "If enabled, sysrepo logger will append thread ID (as well as function name) to each printed message."
-        OFF)
+set(LOG_THREAD_ID 0 CACHE BOOL
+    "If enabled, sysrepo logger will append thread ID (as well as function name) to each printed message.")
+
+set(ENABLE_CONFIG_CHANGE_NOTIF 1 CACHE BOOL
+    "Generate config-change notifications (RFC 6470).")
+
+set(STORE_CONFIG_CHANGE_NOTIF 1 CACHE BOOL
+    "Save config-change notifications (RFC 6470) in the notification store (slows down the commit process).")
+
+# timeouts
+set(REQUEST_TIMEOUT 3 CACHE INTEGER
+    "Timeout (in seconds) for standard Sysrepo API requests.")
+
+set(LONG_REQUEST_TIMEOUT 15 CACHE INTEGER
+    "Timeout (in seconds) for Sysrepo API requests that can take longer than standard requests (commit, copy-config, rpc, action).")
+
+set(COMMIT_VERIFY_TIMEOUT 10 CACHE INTEGER
+    "Timeout (in seconds) that a commit request can wait for answer from commit verifiers and change notification subscribers.")
+
+set(OPER_DATA_PROVIDE_TIMEOUT 2 CACHE INTEGER
+    "Timeout (in seconds) that a request can wait for operational data from data providers.")
+
+set(NOTIF_AGE_TIMEOUT 60 CACHE INTEGER
+    "Timeout (in minutes) after which stored notifications will be aged out and erased from notification store.")
+
+set(NOTIF_TIME_WINDOW 10 CACHE INTEGER
+    "Time window (in minutes) for notifications to be grouped into one data file (larger window produces larger data files).")
 
 # add subdirectories
 add_subdirectory(src)
@@ -268,6 +292,7 @@ if(WITH_SYSTEMD)
 endif()
 
 INSTALL_YANG("ietf-netconf-notifications" "" "666")
+INSTALL_YANG("nc-notifications" "" "666")
 
 if(GEN_LANGUAGE_BINDINGS)
     add_subdirectory(swig)

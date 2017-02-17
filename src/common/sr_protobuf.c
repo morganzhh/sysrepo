@@ -33,6 +33,8 @@ sr_gpb_operation_name(Sr__Operation operation)
         return "session-stop";
     case SR__OPERATION__SESSION_REFRESH:
         return "session-refresh";
+    case SR__OPERATION__SESSION_CHECK:
+        return "session-check";
     case SR__OPERATION__SESSION_SWITCH_DS:
         return "session-switch-ds";
     case SR__OPERATION__SESSION_SET_OPTS:
@@ -85,6 +87,8 @@ sr_gpb_operation_name(Sr__Operation operation)
         return "get changes";
     case SR__OPERATION__DATA_PROVIDE:
         return "data-provide";
+    case SR__OPERATION__CHECK_EXEC_PERMISSION:
+        return "check-exec-permission";
     case SR__OPERATION__RPC:
         return "rpc";
     case SR__OPERATION__ACTION:
@@ -101,6 +105,12 @@ sr_gpb_operation_name(Sr__Operation operation)
         return "oper-data-timeout";
     case SR__OPERATION__INTERNAL_STATE_DATA:
         return "internal-state-data";
+    case SR__OPERATION__NOTIF_STORE_CLEANUP:
+        return "notif-store-cleanup";
+    case SR__OPERATION__DELAYED_MSG:
+        return "delayed-msg";
+    case SR__OPERATION__NACM_RELOAD:
+        return "nacm-reload";
     case _SR__OPERATION_IS_INT_SIZE:
         return "unknown";
     }
@@ -155,6 +165,12 @@ sr_gpb_req_alloc(sr_mem_ctx_t *sr_mem, const Sr__Operation operation, const uint
             CHECK_NULL_NOMEM_GOTO(sub_msg, rc, error);
             sr__session_refresh_req__init((Sr__SessionRefreshReq*)sub_msg);
             req->session_refresh_req = (Sr__SessionRefreshReq*)sub_msg;
+            break;
+        case SR__OPERATION__SESSION_CHECK:
+            sub_msg = sr_calloc(sr_mem, 1, sizeof(Sr__SessionCheckReq));
+            CHECK_NULL_NOMEM_GOTO(sub_msg, rc, error);
+            sr__session_check_req__init((Sr__SessionCheckReq*)sub_msg);
+            req->session_check_req = (Sr__SessionCheckReq*)sub_msg;
             break;
         case SR__OPERATION__SESSION_SWITCH_DS:
             sub_msg = sr_calloc(sr_mem, 1, sizeof(Sr__SessionSwitchDsReq));
@@ -312,6 +328,12 @@ sr_gpb_req_alloc(sr_mem_ctx_t *sr_mem, const Sr__Operation operation, const uint
             sr__data_provide_req__init((Sr__DataProvideReq*)sub_msg);
             req->data_provide_req = (Sr__DataProvideReq*)sub_msg;
             break;
+        case SR__OPERATION__CHECK_EXEC_PERMISSION:
+            sub_msg = sr_calloc(sr_mem, 1, sizeof(Sr__CheckExecPermReq));
+            CHECK_NULL_NOMEM_GOTO(sub_msg, rc, error);
+            sr__check_exec_perm_req__init((Sr__CheckExecPermReq*)sub_msg);
+            req->check_exec_perm_req = (Sr__CheckExecPermReq*)sub_msg;
+            break;
         case SR__OPERATION__RPC:
         case SR__OPERATION__ACTION:
             sub_msg = sr_calloc(sr_mem, 1, sizeof(Sr__RPCReq));
@@ -405,6 +427,12 @@ sr_gpb_resp_alloc(sr_mem_ctx_t *sr_mem, const Sr__Operation operation, const uin
            CHECK_NULL_NOMEM_GOTO(sub_msg, rc, error);
            sr__session_refresh_resp__init((Sr__SessionRefreshResp*)sub_msg);
            resp->session_refresh_resp = (Sr__SessionRefreshResp*)sub_msg;
+           break;
+        case SR__OPERATION__SESSION_CHECK:
+           sub_msg = sr_calloc(sr_mem, 1, sizeof(Sr__SessionCheckResp));
+           CHECK_NULL_NOMEM_GOTO(sub_msg, rc, error);
+           sr__session_check_resp__init((Sr__SessionCheckResp*)sub_msg);
+           resp->session_check_resp = (Sr__SessionCheckResp*)sub_msg;
            break;
         case SR__OPERATION__SESSION_SWITCH_DS:
            sub_msg = sr_calloc(sr_mem, 1, sizeof(Sr__SessionSwitchDsResp));
@@ -561,6 +589,12 @@ sr_gpb_resp_alloc(sr_mem_ctx_t *sr_mem, const Sr__Operation operation, const uin
             CHECK_NULL_NOMEM_GOTO(sub_msg, rc, error);
             sr__data_provide_resp__init((Sr__DataProvideResp*)sub_msg);
             resp->data_provide_resp = (Sr__DataProvideResp*)sub_msg;
+            break;
+        case SR__OPERATION__CHECK_EXEC_PERMISSION:
+            sub_msg = sr_calloc(sr_mem, 1, sizeof(Sr__CheckExecPermResp));
+            CHECK_NULL_NOMEM_GOTO(sub_msg, rc, error);
+            sr__check_exec_perm_resp__init((Sr__CheckExecPermResp*)sub_msg);
+            resp->check_exec_perm_resp = (Sr__CheckExecPermResp*)sub_msg;
             break;
         case SR__OPERATION__RPC:
         case SR__OPERATION__ACTION:
@@ -800,6 +834,25 @@ sr_gpb_internal_req_alloc(sr_mem_ctx_t *sr_mem, const Sr__Operation operation, S
             sr__internal_state_data_req__init((Sr__InternalStateDataReq*)sub_msg);
             req->internal_state_data_req = (Sr__InternalStateDataReq*) sub_msg;
             break;
+        case SR__OPERATION__NOTIF_STORE_CLEANUP:
+            sub_msg = sr_calloc(sr_mem, 1, sizeof(Sr__NotifStoreCleanupReq));
+            CHECK_NULL_NOMEM_GOTO(sub_msg, rc, error);
+            sr__notif_store_cleanup_req__init((Sr__NotifStoreCleanupReq*)sub_msg);
+            req->notif_store_cleanup_req = (Sr__NotifStoreCleanupReq*) sub_msg;
+            break;
+        case SR__OPERATION__DELAYED_MSG:
+            sub_msg = sr_calloc(sr_mem, 1, sizeof(Sr__DelayedMsgReq));
+            CHECK_NULL_NOMEM_GOTO(sub_msg, rc, error);
+            sr__delayed_msg_req__init((Sr__DelayedMsgReq*)sub_msg);
+            req->delayed_msg_req = (Sr__DelayedMsgReq*) sub_msg;
+            break;
+        case SR__OPERATION__NACM_RELOAD:
+            sub_msg = sr_calloc(sr_mem, 1, sizeof(Sr__NacmReloadReq));
+            CHECK_NULL_NOMEM_GOTO(sub_msg, rc, error);
+            sr__nacm_reload_req__init((Sr__NacmReloadReq*)sub_msg);
+            req->nacm_reload_req = (Sr__NacmReloadReq*)sub_msg;
+            break;
+
         default:
             break;
     }
@@ -844,6 +897,9 @@ sr_gpb_msg_validate(const Sr__Msg *msg, const Sr__Msg__MsgType type, const Sr__O
                 break;
             case SR__OPERATION__SESSION_REFRESH:
                 CHECK_NULL_RETURN(msg->request->session_refresh_req, SR_ERR_MALFORMED_MSG);
+                break;
+            case SR__OPERATION__SESSION_CHECK:
+                CHECK_NULL_RETURN(msg->request->session_check_req, SR_ERR_MALFORMED_MSG);
                 break;
             case SR__OPERATION__SESSION_SWITCH_DS:
                 CHECK_NULL_RETURN(msg->request->session_switch_ds_req, SR_ERR_MALFORMED_MSG);
@@ -923,6 +979,9 @@ sr_gpb_msg_validate(const Sr__Msg *msg, const Sr__Msg__MsgType type, const Sr__O
             case SR__OPERATION__DATA_PROVIDE:
                 CHECK_NULL_RETURN(msg->request->data_provide_req, SR_ERR_MALFORMED_MSG);
                 break;
+            case SR__OPERATION__CHECK_EXEC_PERMISSION:
+                CHECK_NULL_RETURN(msg->request->check_exec_perm_req, SR_ERR_MALFORMED_MSG);
+                break;
             case SR__OPERATION__RPC:
             case SR__OPERATION__ACTION:
                 CHECK_NULL_RETURN(msg->request->rpc_req, SR_ERR_MALFORMED_MSG);
@@ -951,6 +1010,9 @@ sr_gpb_msg_validate(const Sr__Msg *msg, const Sr__Msg__MsgType type, const Sr__O
                 break;
             case SR__OPERATION__SESSION_REFRESH:
                 CHECK_NULL_RETURN(msg->response->session_refresh_resp, SR_ERR_MALFORMED_MSG);
+                break;
+            case SR__OPERATION__SESSION_CHECK:
+                CHECK_NULL_RETURN(msg->response->session_check_resp, SR_ERR_MALFORMED_MSG);
                 break;
             case SR__OPERATION__SESSION_SWITCH_DS:
                 CHECK_NULL_RETURN(msg->response->session_switch_ds_resp, SR_ERR_MALFORMED_MSG);
@@ -1029,6 +1091,9 @@ sr_gpb_msg_validate(const Sr__Msg *msg, const Sr__Msg__MsgType type, const Sr__O
                 break;
             case SR__OPERATION__DATA_PROVIDE:
                 CHECK_NULL_RETURN(msg->response->data_provide_resp, SR_ERR_MALFORMED_MSG);
+                break;
+            case SR__OPERATION__CHECK_EXEC_PERMISSION:
+                CHECK_NULL_RETURN(msg->response->check_exec_perm_resp, SR_ERR_MALFORMED_MSG);
                 break;
             case SR__OPERATION__RPC:
             case SR__OPERATION__ACTION:
@@ -1628,7 +1693,9 @@ sr_values_sr_to_gpb(const sr_val_t *sr_values, const size_t sr_value_cnt, Sr__Va
 cleanup:
     if (NULL == sr_mem) {
         for (size_t i = 0; i < sr_value_cnt; i++) {
-            sr__value__free_unpacked(gpb_values[i], NULL);
+            if (NULL != gpb_values[i]) {
+                sr__value__free_unpacked(gpb_values[i], NULL);
+            }
         }
         free(gpb_values);
     } else {
@@ -2144,6 +2211,12 @@ sr_subsciption_type_str_to_gpb(const char *type_name)
     if (0 == strcmp(type_name, "action")) {
         return SR__SUBSCRIPTION_TYPE__ACTION_SUBS;
     }
+    if (0 == strcmp(type_name, "hello")) {
+        return SR__SUBSCRIPTION_TYPE__HELLO_SUBS;
+    }
+    if (0 == strcmp(type_name, "commit-end")) {
+        return SR__SUBSCRIPTION_TYPE__COMMIT_END_SUBS;
+    }
     if (0 == strcmp(type_name, "event-notification")) {
         return SR__SUBSCRIPTION_TYPE__EVENT_NOTIF_SUBS;
     }
@@ -2239,15 +2312,15 @@ sr_ev_notification_type_gpb_to_sr(Sr__EventNotifReq__NotifType ev_notif_type)
 {
     switch (ev_notif_type) {
         case SR__EVENT_NOTIF_REQ__NOTIF_TYPE__REALTIME:
-            return SR_EV_NOTIF_REALTIME;
+            return SR_EV_NOTIF_T_REALTIME;
         case SR__EVENT_NOTIF_REQ__NOTIF_TYPE__REPLAY:
-            return SR_EV_NOTIF_REPLAY;
+            return SR_EV_NOTIF_T_REPLAY;
         case SR__EVENT_NOTIF_REQ__NOTIF_TYPE__REPLAY_COMPLETE:
-            return SR_EV_NOTIF_REPLAY_COMPLETE;
+            return SR_EV_NOTIF_T_REPLAY_COMPLETE;
         case SR__EVENT_NOTIF_REQ__NOTIF_TYPE__REPLAY_STOP:
-            return SR_EV_NOTIF_REPLAY_STOP;
+            return SR_EV_NOTIF_T_REPLAY_STOP;
         default:
-            return SR_EV_NOTIF_REALTIME;
+            return SR_EV_NOTIF_T_REALTIME;
     }
 }
 

@@ -34,6 +34,7 @@
 #include "test_module_helper.h"
 #include "rp_dt_context_helper.h"
 #include "rp_internal.h"
+#include "system_helper.h"
 
 #define LEAF_VALUE "leafV"
 
@@ -2073,10 +2074,6 @@ edit_move3_test(void **state)
     rc = rp_dt_get_values_wrapper(ctx, session, NULL, "/test-module:user", &values, &cnt);
     assert_int_equal(SR_ERR_NOT_FOUND, rc);
 
-    session->state = RP_REQ_NEW;
-    rc = rp_dt_get_values_wrapper(ctx, session, NULL, "/test-module:ordered-numbers", &values, &cnt);
-    assert_int_equal(SR_ERR_NOT_FOUND, rc);
-
     /* add some ordered leaf-list entries */
     sr_val_t *v = NULL;
     v = calloc(1, sizeof(*v));
@@ -2107,11 +2104,15 @@ edit_move3_test(void **state)
     session->state = RP_REQ_NEW;
     rc = rp_dt_get_values_wrapper(ctx, session, NULL, "/test-module:ordered-numbers", &values, &cnt);
     assert_int_equal(SR_ERR_OK, rc);
-    assert_int_equal(3, cnt);
+    assert_int_equal(7, cnt);
 
-    assert_int_equal(1, values[0].data.uint8_val);
-    assert_int_equal(2, values[1].data.uint8_val);
-    assert_int_equal(9, values[2].data.uint8_val);
+    assert_int_equal(0, values[0].data.uint8_val);
+    assert_int_equal(57, values[1].data.uint8_val);
+    assert_int_equal(12, values[2].data.uint8_val);
+    assert_int_equal(45, values[3].data.uint8_val);
+    assert_int_equal(1, values[4].data.uint8_val);
+    assert_int_equal(2, values[5].data.uint8_val);
+    assert_int_equal(9, values[6].data.uint8_val);
 
     sr_free_values(values, cnt);
 
@@ -2121,11 +2122,15 @@ edit_move3_test(void **state)
     session->state = RP_REQ_NEW;
     rc = rp_dt_get_values_wrapper(ctx, session, NULL, "/test-module:ordered-numbers", &values, &cnt);
     assert_int_equal(SR_ERR_OK, rc);
-    assert_int_equal(3, cnt);
+    assert_int_equal(7, cnt);
 
     assert_int_equal(9, values[0].data.uint8_val);
-    assert_int_equal(1, values[1].data.uint8_val);
-    assert_int_equal(2, values[2].data.uint8_val);
+    assert_int_equal(0, values[1].data.uint8_val);
+    assert_int_equal(57, values[2].data.uint8_val);
+    assert_int_equal(12, values[3].data.uint8_val);
+    assert_int_equal(45, values[4].data.uint8_val);
+    assert_int_equal(1, values[5].data.uint8_val);
+    assert_int_equal(2, values[6].data.uint8_val);
 
     sr_free_values(values, cnt);
 
@@ -2601,5 +2606,9 @@ int main(){
             cmocka_unit_test_setup(edit_union_type, createData),
             cmocka_unit_test_setup(validaton_of_multiple_models, createData),
     };
-    return cmocka_run_group_tests(tests, setup, teardown);
+
+    watchdog_start(300);
+    int ret = cmocka_run_group_tests(tests, setup, teardown);
+    watchdog_stop();
+    return ret;
 }

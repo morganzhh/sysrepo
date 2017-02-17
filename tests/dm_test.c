@@ -31,6 +31,7 @@
 #include "test_module_helper.h"
 #include "rp_dt_lookup.h"
 #include "rp_dt_xpath.h"
+#include "system_helper.h"
 
 int setup(void **state)
 {
@@ -167,37 +168,37 @@ dm_get_schema_test(void **state)
     assert_int_equal(SR_ERR_OK, rc);
 
     /* module latest revision */
-    rc = dm_get_schema(ctx, "module-a", NULL, NULL, true, &schema);
+    rc = dm_get_schema(ctx, "module-a", NULL, NULL, NULL, true, &schema);
     assert_int_equal(SR_ERR_OK, rc);
     assert_non_null(schema);
     free(schema);
 
     /* module latest revision  yin format*/
-    rc = dm_get_schema(ctx, "module-a", NULL, NULL, false, &schema);
+    rc = dm_get_schema(ctx, "module-a", NULL, NULL, NULL, false, &schema);
     assert_int_equal(SR_ERR_OK, rc);
     assert_non_null(schema);
     free(schema);
 
     /* module-b latest revision which depends on module-a older revision */
-    rc = dm_get_schema(ctx, "module-b", NULL, NULL, true, &schema);
+    rc = dm_get_schema(ctx, "module-b", NULL, NULL, NULL, true, &schema);
     assert_int_equal(SR_ERR_OK, rc);
     assert_non_null(schema);
     free(schema);
 
     /* module selected revision */
-    rc = dm_get_schema(ctx, "module-a", "2016-02-02", NULL, true, &schema);
+    rc = dm_get_schema(ctx, "module-a", "2016-02-02", NULL, NULL, true, &schema);
     assert_int_equal(SR_ERR_OK, rc);
     assert_non_null(schema);
     free(schema);
 
     /* submodule latest revision */
-    rc = dm_get_schema(ctx, "module-a", NULL, "sub-a-one", true, &schema);
+    rc = dm_get_schema(ctx, NULL, NULL, "sub-a-one", NULL, true, &schema);
     assert_int_equal(SR_ERR_OK, rc);
     assert_non_null(schema);
     free(schema);
 
     /* submodule selected revision */
-    rc = dm_get_schema(ctx, "module-a", "2016-02-02", "sub-a-one", true, &schema);
+    rc = dm_get_schema(ctx, "module-a", NULL, "sub-a-one", "2016-02-02", true, &schema);
     assert_int_equal(SR_ERR_OK, rc);
     assert_non_null(schema);
     free(schema);
@@ -218,24 +219,24 @@ dm_get_schema_negative_test(void **state)
     assert_int_equal(SR_ERR_OK, rc);
 
     /* unknown module */
-    rc = dm_get_schema(ctx, "unknown", NULL, NULL, true, &schema);
+    rc = dm_get_schema(ctx, "unknown", NULL, NULL, NULL, true, &schema);
     assert_int_equal(SR_ERR_NOT_FOUND, rc);
     assert_null(schema);
 
 
     /* module unknown revision */
-    rc = dm_get_schema(ctx, "module-a", "2018-02-02", NULL, true, &schema);
+    rc = dm_get_schema(ctx, "module-a", "2018-02-02", NULL, NULL, true, &schema);
     assert_int_equal(SR_ERR_NOT_FOUND, rc);
     assert_null(schema);
 
 
     /* unknown submodule */
-    rc = dm_get_schema(ctx, "module-a", NULL, "sub-unknown", true, &schema);
+    rc = dm_get_schema(ctx, "module-a", NULL, "sub-unknown", NULL, true, &schema);
     assert_int_equal(SR_ERR_NOT_FOUND, rc);
     assert_null(schema);
 
     /* submodule unknown revision */
-    rc = dm_get_schema(ctx, "module-a", "2018-02-10", "sub-a-one", true, &schema);
+    rc = dm_get_schema(ctx, "module-a", NULL, "sub-a-one", "2018-02-10", true, &schema);
     assert_int_equal(SR_ERR_NOT_FOUND, rc);
     assert_null(schema);
 
@@ -1015,6 +1016,13 @@ verify_xpath_hash(struct lyd_node *node, uint32_t expected)
     assert_int_equal(expected, dm_get_node_xpath_hash(node->schema));
 }
 
+static void
+verify_data_depth(struct lyd_node *node, uint16_t expected)
+{
+    assert_non_null(node);
+    assert_non_null(node->schema->priv);
+    assert_int_equal(expected, dm_get_node_data_depth(node->schema));
+}
 void
 dm_schema_node_xpath_hash(void **state)
 {
@@ -1034,55 +1042,66 @@ dm_schema_node_xpath_hash(void **state)
     node = get_single_node(data_tree, "/ietf-interfaces:interfaces");
     hash = sr_str_hash("ietf-interfaces:interfaces");
     verify_xpath_hash(node, hash);
+    verify_data_depth(node, 0);
 
     node = get_single_node(data_tree, "/ietf-interfaces:interfaces/interface[name='eth0']");
     hash = sr_str_hash("ietf-interfaces:interfaces") + sr_str_hash("ietf-interfaces:interface");
     verify_xpath_hash(node, hash);
+    verify_data_depth(node, 1);
 
     node = get_single_node(data_tree, "/ietf-interfaces:interfaces/interface[name='eth0']/ietf-ip:ipv4");
     hash = sr_str_hash("ietf-interfaces:interfaces") + sr_str_hash("ietf-interfaces:interface")
            + sr_str_hash("ietf-ip:ipv4");
     verify_xpath_hash(node, hash);
+    verify_data_depth(node, 2);
 
     node = get_single_node(data_tree, "/ietf-interfaces:interfaces/interface[name='eth0']/ietf-ip:ipv4/enabled");
     hash = sr_str_hash("ietf-interfaces:interfaces") + sr_str_hash("ietf-interfaces:interface")
            + sr_str_hash("ietf-ip:ipv4") + sr_str_hash("ietf-ip:enabled");
     verify_xpath_hash(node, hash);
+    verify_data_depth(node, 3);
 
     node = get_single_node(data_tree, "/ietf-interfaces:interfaces/interface[name='eth0']/ietf-ip:ipv4/address[ip='192.168.2.100']/ip");
     hash = sr_str_hash("ietf-interfaces:interfaces") + sr_str_hash("ietf-interfaces:interface")
            + sr_str_hash("ietf-ip:ipv4") + sr_str_hash("ietf-ip:address") + sr_str_hash("ietf-ip:ip");
     verify_xpath_hash(node, hash);
+    verify_data_depth(node, 4);
 
     assert_int_equal(SR_ERR_OK, dm_get_datatree(ctx, ses_ctx, "test-module", &data_tree));
 
     node = get_single_node(data_tree, "/test-module:main/i32");
     hash = sr_str_hash("test-module:main") + sr_str_hash("test-module:i32");
     verify_xpath_hash(node, hash);
+    verify_data_depth(node, 1);
 
     node = get_single_node(data_tree, "/test-module:list[key='k1']/wireless");
     hash = sr_str_hash("test-module:list") + sr_str_hash("test-module:wireless");
     verify_xpath_hash(node, hash);
+    verify_data_depth(node, 1);
 
     node = get_single_node(data_tree, "/test-module:university/classes/class[title='CCNA']/student[name='nameB']/age");
     hash = sr_str_hash("test-module:university") + sr_str_hash("test-module:classes")
            + sr_str_hash("test-module:class") + sr_str_hash("test-module:student") + sr_str_hash("test-module:age");
     verify_xpath_hash(node, hash);
+    verify_data_depth(node, 4);
 
     assert_int_equal(SR_ERR_OK, dm_get_datatree(ctx, ses_ctx, "example-module", &data_tree));
 
     node = get_single_node(data_tree, "/example-module:container");
     hash = sr_str_hash("example-module:container");
     verify_xpath_hash(node, hash);
+    verify_data_depth(node, 0);
 
     node = get_single_node(data_tree, "/example-module:container/list[key1='key1'][key2='key2']");
     hash = sr_str_hash("example-module:container") + sr_str_hash("example-module:list");
     verify_xpath_hash(node, hash);
+    verify_data_depth(node, 1);
 
     node = get_single_node(data_tree, "/example-module:container/list[key1='key1'][key2='key2']/leaf");
     hash = sr_str_hash("example-module:container") + sr_str_hash("example-module:list")
            + sr_str_hash("example-module:leaf");
     verify_xpath_hash(node, hash);
+    verify_data_depth(node, 2);
 
     dm_session_stop(ctx, ses_ctx);
     dm_cleanup(ctx);
@@ -1111,6 +1130,10 @@ main()
             cmocka_unit_test(dm_action_test),
             cmocka_unit_test(dm_schema_node_xpath_hash),
     };
-    return cmocka_run_group_tests(tests, setup, NULL);
+
+    watchdog_start(300);
+    int ret = cmocka_run_group_tests(tests, setup, NULL);
+    watchdog_stop();
+    return ret;
 }
 

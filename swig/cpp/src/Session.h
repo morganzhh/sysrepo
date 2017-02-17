@@ -66,6 +66,7 @@ public:
     S_Tree get_parent(S_Tree in_tree);
 
     void set_item(const char *xpath, S_Val value = NULL, const sr_edit_options_t opts = EDIT_DEFAULT);
+    void set_item_str(const char *xpath, const char *value, const sr_edit_options_t opts = EDIT_DEFAULT);
     void delete_item(const char *xpath, const sr_edit_options_t opts = EDIT_DEFAULT);
     void move_item(const char *xpath, const sr_move_position_t position, const char *relative_item = NULL);
     void refresh();
@@ -81,7 +82,13 @@ public:
     S_Iter_Change get_changes_iter(const char *xpath);
     S_Change get_change_next(S_Iter_Change iter);
     ~Session();
-    sr_session_ctx_t *get() {return _sess;};
+
+    S_Vals rpc_send(const char *xpath, S_Vals input);
+    S_Trees rpc_send(const char *xpath, S_Trees input);
+    S_Vals action_send(const char *xpath, S_Vals input);
+    S_Trees action_send(const char *xpath, S_Trees input);
+    void send_event(const char * xpath, S_Vals values, const sr_ev_notif_flag_t options = SR_EV_NOTIF_DEFAULT);
+    void send_event(const char * xpath, S_Trees trees, const sr_ev_notif_flag_t options = SR_EV_NOTIF_DEFAULT);
 
     friend class Subscribe;
 
@@ -136,21 +143,18 @@ public:
     std::vector<S_Callback > cb_list;
 
     void unsubscribe();
-    S_Vals rpc_send(const char *xpath, S_Vals input);
-    S_Vals action_send(const char *xpath, S_Vals input);
-    S_Trees rpc_send_tree(const char *xpath, S_Trees input);
-    S_Trees action_send_tree(const char *xpath, S_Trees input);
     ~Subscribe();
 
     // SWIG specific
-    sr_subscription_ctx_t *swig_sub;
-    S_Session swig_sess;
+    sr_subscription_ctx_t **swig_sub() { return &_sub;};
+    sr_session_ctx_t *swig_sess() {return _sess->_sess;};
     std::vector<void*> wrap_cb_l;
     void additional_cleanup(void *) {return;};
 
 private:
     sr_subscription_ctx_t *_sub;
     S_Session _sess;
+    S_Deleter sess_deleter;
 };
 
 #endif

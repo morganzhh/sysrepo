@@ -342,9 +342,13 @@ typedef uint32_t sr_conn_options_t;
  * and ::sr_session_start_user calls).
  */
 typedef enum sr_session_flag_e {
-    SR_SESS_DEFAULT = 0,      /**< Default (normal) session behavior. */
-    SR_SESS_CONFIG_ONLY = 1,  /**< Session will process only configuration data (e.g. sysrepo won't
-                                   return any state data by ::sr_get_items / ::sr_get_items_iter calls). */
+    SR_SESS_DEFAULT = 0,       /**< Default (normal) session behavior. */
+    SR_SESS_CONFIG_ONLY = 1,   /**< Session will process only configuration data (e.g. sysrepo won't
+                                    return any state data by ::sr_get_items / ::sr_get_items_iter calls). */
+    SR_SESS_ENABLE_NACM = 2,   /**< Enable NETCONF access control for this session (disabled by default). */
+
+    SR_SESS_MUTABLE_OPTS = 3   /**< Bit-mask of options that can be set by the user
+                                    (immutable flags are defined in sysrepo.proto file). */
 } sr_session_flag_t;
 
 /**
@@ -378,7 +382,7 @@ typedef enum sr_datastore_e {
  *
  * @note If the client library loses connection to the Sysrepo Engine during
  * the lifetime of the application, all Sysrepo API calls will start returning
- * ::SR_ERR_DISCONNECT error. In this case, the application is supposed to reconnect
+ * ::SR_ERR_DISCONNECT error on active sessions. In this case, the application is supposed to reconnect
  * with another ::sr_connect call and restart all lost sessions.
  *
  * @param[in] app_name Name of the application connecting to the datastore
@@ -480,6 +484,26 @@ int sr_session_stop(sr_session_ctx_t *session);
 int sr_session_refresh(sr_session_ctx_t *session);
 
 /**
+ * @brief Checks aliveness and validity of the session & connection tied to it.
+ *
+ * If the connection to the Sysrepo Engine has been lost in the meantime, returns SR_ERR_DICONNECT.
+ * In this case, the application is supposed to stop the session (::sr_session_stop), disconnect (::sr_disconnect)
+ * and then reconnect (::sr_connect) and start a new session (::sr_session_start).
+ *
+ * @note If the client library loses connection to the Sysrepo Engine during the lifetime of the application,
+ * all Sysrepo API calls will start returning SR_ERR_DISCONNECT error on active sessions. This is the primary
+ * mechanism that can be used to detect connection issues, ::sr_session_check is just an addition to it. Since
+ * ::sr_session_check sends a message to the Sysrepo Engine and waits for the response, it costs some extra overhead
+ * in contrast to catching SR_ERR_DISCONNECT error.
+ *
+ * @param[in] session Session context acquired with ::sr_session_start call.
+ *
+ * @return Error code (SR_ERR_OK in case that the session is healthy,
+ * SR_ERR_DICONNECT in case that connection to the Sysrepo Engine has been lost).
+ */
+int sr_session_check(sr_session_ctx_t *session);
+
+/**
  * @brief Changes datastore to which the session is tied to. All subsequent
  * calls will be issued on the chosen datastore.
  *
@@ -552,6 +576,13 @@ int sr_get_last_errors(sr_session_ctx_t *session, const sr_error_info_t **error_
  */
 int sr_set_error(sr_session_ctx_t *session, const char *message, const char *xpath);
 
+/**
+ * @brief Returns the assigned id of the session. Can be used to pair the session with
+ * netconf-config-change notification initiator.
+ * @param [in] session
+ * @return session id or 0 in case of error
+ */
+uint32_t sr_session_get_id(sr_session_ctx_t *session);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Data Retrieval API (get / get-config functionality)
@@ -642,6 +673,23 @@ int sr_list_schemas(sr_session_ctx_t *session, sr_schema_t **schemas, size_t *sc
  */
 int sr_get_schema(sr_session_ctx_t *session, const char *module_name, const char *revision,
          const char *submodule_name, sr_schema_format_t format, char **schema_content);
+
+/**
+ * @brief Retrieves the content of the specified submodule schema file. If the submodule
+ * cannot be found, SR_ERR_NOT_FOUND is returned.
+ *
+ * @param[in] session Session context acquired from ::sr_session_start call.
+ * @param[in] submodule_name Name of the requested submodule.
+ * @param[in] submodule_revision Requested revision of the submodule. If NULL
+ * is passed, the latest revision will be returned.
+ * @param[in] format of the returned schema.
+ * @param[out] schema_content Content of the specified schema file. Automatically
+ * allocated by the function, should be freed by the caller.
+ *
+ * @return Error code (SR_ERR_OK on success).
+ */
+int sr_get_submodule_schema(sr_session_ctx_t *session, const char *submodule_name, const char *submodule_revision,
+                            sr_schema_format_t format, char **schema_content);
 
 /**
  * @brief Retrieves a single data element stored under provided XPath. If multiple
@@ -1126,10 +1174,10 @@ typedef enum sr_subscr_flag_e {
     SR_SUBSCR_NO_ABORT_FOR_REFUSED_CFG = 16,
 
     /**
-     * @brief This is a strict notification replay subscription: no realtime notifications will be delivered
-     * until all reply notifications are delivered (::SR_EV_NOTIF_REPLAY_COMPLETE is delivered).
+     * @brief No real-time notifications will be delivered until ::sr_event_notif_replay is called
+     * and replay has finished (::SR_EV_NOTIF_REPLAY_COMPLETE is delivered).
      */
-    SR_SUBSCR_NOTIF_REPLAY_STRICT = 32,
+    SR_SUBSCR_NOTIF_REPLAY_FIRST = 32,
 } sr_subscr_flag_t;
 
 /**
@@ -1157,8 +1205,8 @@ typedef enum sr_notif_event_e {
                         has denied the change / returned an error). The subscriber is supposed to return the managed
                         application to the state before the commit. Any returned errors are just logged and ignored. */
     SR_EV_ENABLED, /**< Occurs just after the subscription. Subscriber gets notified about configuration that was copied
-                        from startup to running. This allows to reuse the callback for applying changes made in running to reflect the changes
-                        when the configuration is copied from startup to running during subscription process */
+                        from startup to running. This allows to reuse the callback for applying changes made in running to
+                        reflect the changes when the configuration is copied from startup to running during subscription process */
 } sr_notif_event_t;
 
 /**
@@ -1365,6 +1413,10 @@ int sr_get_changes_iter(sr_session_ctx_t *session, const char *xpath, sr_change_
  * @brief Returns the next change from the changeset of provided iterator created
  * by ::sr_get_changes_iter call. If there is no item left, SR_ERR_NOT_FOUND is returned.
  *
+ * @note If the operation is ::SR_OP_MOVED the meaning of new_value and old value argument is
+ * as follows - the value pointed by new_value was moved after the old_value. If the
+ * old value is NULL it was moved to the first position.
+ *
  * @param[in] session Session context as passed to notication the callbacks (e.g.
  * ::sr_module_change_cb or ::sr_subtree_change_cb). Will not work with any other sessions.
  * @param[in,out] iter Iterator acquired with ::sr_get_changes_iter call.
@@ -1383,6 +1435,28 @@ int sr_get_change_next(sr_session_ctx_t *session, sr_change_iter_t *iter, sr_cha
 ////////////////////////////////////////////////////////////////////////////////
 // RPC (Remote Procedure Calls) API
 ////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * @brief Check if the owner of this session is authorized by NACM to invoke the protocol
+ * operation defined in a (installed) YANG module under the given xpath (as RPC or Action).
+ *
+ * This call is intended for northbound management applications that need to implement
+ * the NETCONF Access Control Model (RFC 6536) to restrict the protocol operations that
+ * each user is authorized to execute.
+ *
+ * NETCONF access control is already included in the processing of ::sr_rpc_send,
+ * ::sr_rpc_send_tree, ::sr_action_send and ::sr_action_send_tree and thus it should be
+ * sufficient to call this function only prior to executing any of the NETCONF standard
+ * protocol operations as they cannot be always directly translated to a single sysrepo
+ * API call.
+ *
+ * @param[in] session Session context acquired with ::sr_session_start call.
+ * @param[in] xpath XPath identifying the protocol operation.
+ * @param[out] permitted TRUE if the user is permitted to execute the given operation, FALSE otherwise.
+ *
+ * @return Error code (SR_ERR_OK on success).
+ */
+int sr_check_exec_permission(sr_session_ctx_t *session, const char *xpath, bool *permitted);
 
 /**
  * @brief Callback to be called by the delivery of RPC specified by xpath.
@@ -1508,7 +1582,7 @@ typedef sr_rpc_cb sr_action_cb;
  * specified by xpath.
  * This callback variant operates with sysrepo trees rather than with sysrepo values,
  * use it with ::sr_action_subscribe_tree and ::sr_action_send_tree.
- * @see This type is an alias for tree variant of @ref sr_rpc_tree_cb "the RPC callback type"
+ * @see This type is an alias for tree variant of @ref sr_rpc_tree_cb "the RPC callback "
  */
 typedef sr_rpc_tree_cb sr_action_tree_cb;
 
@@ -1593,13 +1667,28 @@ int sr_action_send_tree(sr_session_ctx_t *session, const char *xpath,
  * @brief Type of the notification passed to the ::sr_event_notif_cb and ::sr_event_notif_tree_cb callbacks.
  */
 typedef enum sr_ev_notif_type_e {
-    SR_EV_NOTIF_REALTIME,         /**< Real-time notification. The only possible type if you don't use ::sr_event_notif_replay. */
-    SR_EV_NOTIF_REPLAY,           /**< Replayed notification. */
-    SR_EV_NOTIF_REPLAY_COMPLETE,  /**< Not a real notification, just a signal that the notification replay has completed
-                                       (all the stored notifications from the given time interval have been delivered). */
-    SR_EV_NOTIF_REPLAY_STOP,      /**< Not a real notification, just a signal that replay stop time has been reached
-                                       (delivered only if stop_time was specified to ::sr_event_notif_replay). */
+    SR_EV_NOTIF_T_REALTIME,         /**< Real-time notification. The only possible type if you don't use ::sr_event_notif_replay. */
+    SR_EV_NOTIF_T_REPLAY,           /**< Replayed notification. */
+    SR_EV_NOTIF_T_REPLAY_COMPLETE,  /**< Not a real notification, just a signal that the notification replay has completed
+                                         (all the stored notifications from the given time interval have been delivered). */
+    SR_EV_NOTIF_T_REPLAY_STOP,      /**< Not a real notification, just a signal that replay stop time has been reached
+                                         (delivered only if stop_time was specified to ::sr_event_notif_replay). */
 } sr_ev_notif_type_t;
+
+/**
+ * @brief Flags used to override default notification handling i the datastore.
+ */
+typedef enum sr_ev_notif_flag_e {
+    SR_EV_NOTIF_DEFAULT = 0,      /**< Notification will be handled normally. */
+    SR_EV_NOTIF_EPHEMERAL = 1,    /**< Notification will not be stored in the notification store
+                                       (and therefore will be also delivered faster). */
+} sr_ev_notif_flag_t;
+
+/**
+ * @brief Options overriding default behavior of subscriptions,
+ * it is supposed to be a bitwise OR-ed value of any ::sr_subscr_flag_t flags.
+ */
+typedef uint32_t sr_subscr_options_t;
 
 /**
  * @brief Callback to be called by the delivery of event notification specified by xpath.
@@ -1682,11 +1771,13 @@ int sr_event_notif_subscribe_tree(sr_session_ctx_t *session, const char *xpath,
  * @param[in] values Array of all nodes that hold some data in event notification subtree
  * (same as ::sr_get_items would return).
  * @param[in] values_cnt Number of items inside the values array.
+ * @param[in] opts Options overriding default handling of the notification, it is supposed to be
+ * a bitwise OR-ed value of any ::sr_ev_notif_flag_t flags.
  *
  * @return Error code (SR_ERR_OK on success).
  */
 int sr_event_notif_send(sr_session_ctx_t *session, const char *xpath, const sr_val_t *values,
-        const size_t values_cnt);
+        const size_t values_cnt, sr_ev_notif_flag_t opts);
 
 /**
  * @brief Sends an event notification specified by xpath and waits for the result.
@@ -1697,11 +1788,13 @@ int sr_event_notif_send(sr_session_ctx_t *session, const char *xpath, const sr_v
  * @param[in] xpath XPath identifying the RPC.
  * @param[in] tree Array of subtrees carrying event notification data.
  * @param[in] tree_cnt Number of subtrees with data.
+ * @param[in] opts Options overriding default handling of the notification, it is supposed to be
+ * a bitwise OR-ed value of any ::sr_ev_notif_flag_t flags.
  *
  * @return Error code (SR_ERR_OK on success).
  */
-int sr_event_notif_send_tree(sr_session_ctx_t *session, const char *xpath,
-        const sr_node_t *trees,  const size_t tree_cnt);
+int sr_event_notif_send_tree(sr_session_ctx_t *session, const char *xpath, const sr_node_t *trees,
+        const size_t tree_cnt, sr_ev_notif_flag_t opts);
 
 /**
  * @brief Replays already generated notifications stored in the notification store related to

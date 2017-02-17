@@ -21,6 +21,7 @@
 
 #include <libyang/libyang.h>
 #include <pthread.h>
+#include <inttypes.h>
 #include "sysrepo.h"
 #include "sr_common.h"
 
@@ -36,12 +37,8 @@ rp_dt_free_state_data_ctx_content (rp_state_data_ctx_t *state_data)
 {
     if (NULL != state_data) {
         if (NULL != state_data->subscriptions) {
-            for (size_t i = 0; i < state_data->subscription_cnt; i++) {
-                np_free_subscription(state_data->subscriptions[i]);
-            }
-            free(state_data->subscriptions);
+            np_subscriptions_list_cleanup(state_data->subscriptions);
             state_data->subscriptions = NULL;
-            state_data->subscription_cnt = 0;
         }
         if (NULL != state_data->subtrees) {
             for (size_t i = 0; i< state_data->subtrees->count; i++) {
@@ -277,8 +274,7 @@ rp_dt_get_subtree(dm_ctx_t *dm_ctx, rp_session_t *rp_session, struct lyd_node *d
         return rc;
     }
 
-    rc = rp_dt_init_tree_pruning(dm_ctx, rp_session, node, data_tree, check_enabled, NULL != node->child,
-            &pruning_cb, &pruning_ctx);
+    rc = rp_dt_init_tree_pruning(dm_ctx, rp_session, node, data_tree, check_enabled, &pruning_cb, &pruning_ctx);
     if (SR_ERR_UNAUTHORIZED == rc) {
         rc = SR_ERR_NOT_FOUND;
         goto cleanup;
@@ -328,8 +324,7 @@ rp_dt_get_subtree_chunk(dm_ctx_t *dm_ctx, rp_session_t *rp_session, struct lyd_n
         return rc;
     }
 
-    rc = rp_dt_init_tree_pruning(dm_ctx, rp_session, node, data_tree, check_enabled, NULL != node->child,
-            &pruning_cb, &pruning_ctx);
+    rc = rp_dt_init_tree_pruning(dm_ctx, rp_session, node, data_tree, check_enabled, &pruning_cb, &pruning_ctx);
     if (SR_ERR_UNAUTHORIZED == rc) {
         rc = SR_ERR_NOT_FOUND;
         goto cleanup;
@@ -389,8 +384,7 @@ rp_dt_get_subtrees(dm_ctx_t *dm_ctx, rp_session_t *rp_session, struct lyd_node *
         return rc;
     }
 
-    rc = rp_dt_init_tree_pruning(dm_ctx, rp_session, NULL, data_tree, check_enable,
-            nodes->number > 1 || NULL != nodes->set.d[0]->child, &pruning_cb, &pruning_ctx);
+    rc = rp_dt_init_tree_pruning(dm_ctx, rp_session, NULL, data_tree, check_enable, &pruning_cb, &pruning_ctx);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to initialize sysrepo tree pruning.");
 
     rc = sr_nodes_to_trees(nodes, sr_mem, pruning_cb, (void *)pruning_ctx, subtrees, count);
@@ -433,8 +427,7 @@ rp_dt_get_subtrees_chunks(dm_ctx_t *dm_ctx, rp_session_t *rp_session, struct lyd
         return rc;
     }
 
-    rc = rp_dt_init_tree_pruning(dm_ctx, rp_session, NULL, data_tree, check_enable,
-            nodes->number > 1 || NULL != nodes->set.d[0]->child, &pruning_cb, &pruning_ctx);
+    rc = rp_dt_init_tree_pruning(dm_ctx, rp_session, NULL, data_tree, check_enable, &pruning_cb, &pruning_ctx);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to initialize sysrepo tree pruning.");
 
     rc = sr_nodes_to_tree_chunks(nodes, slice_offset, slice_width, child_limit, depth_limit, sr_mem,
@@ -594,7 +587,7 @@ rp_dt_get_tree_roots(dm_schema_info_t *schema_info, const char *xpath, struct ly
     rc = rp_dt_get_start_node(schema_info, xpath, &start_node);
     CHECK_RC_LOG_RETURN(rc, "Failed to get the start node for xpath %s", xpath);
 
-    *roots = lys_find_xpath(start_node, xpath, 0);
+    *roots = lys_find_xpath(NULL, start_node, xpath, 0);
     if (NULL == *roots) {
         SR_LOG_ERR("Failed to get the set of tree roots for xpath %s", xpath);
         rc = SR_ERR_INVAL_ARG;
@@ -603,13 +596,9 @@ rp_dt_get_tree_roots(dm_schema_info_t *schema_info, const char *xpath, struct ly
 }
 
 static int
-rp_dt_subscriptions_to_schema_nodes(dm_ctx_t *dm_ctx, np_subscription_t **subscriptions, size_t subscription_cnt, sr_list_t **subscr_nodes)
+rp_dt_subscriptions_to_schema_nodes(dm_ctx_t *dm_ctx, sr_list_t *subscriptions, sr_list_t **subscr_nodes)
 {
     CHECK_NULL_ARG2(dm_ctx, subscr_nodes);
-    if (subscription_cnt > 0) {
-        /* if there are only internally handled state data subscriptions might be NULL */
-        CHECK_NULL_ARG(subscriptions);
-    }
     int rc = SR_ERR_OK;
     struct lys_node *sub_node = NULL;
     sr_list_t *nodes = NULL;
@@ -618,13 +607,16 @@ rp_dt_subscriptions_to_schema_nodes(dm_ctx_t *dm_ctx, np_subscription_t **subscr
     CHECK_RC_MSG_RETURN(rc, "List init failed");
 
     /* find schema nodes corresponding to the subscriptions */
-    for (size_t i = 0; i < subscription_cnt; i++) {
-        rc = rp_dt_validate_node_xpath(dm_ctx, NULL, subscriptions[i]->xpath,
-                    NULL, &sub_node);
-        CHECK_RC_LOG_GOTO(rc, cleanup, "Node validation failed for xpath %s", subscriptions[i]->xpath);
+    if (NULL != subscriptions) {
+        for (size_t i = 0; i < subscriptions->count; i++) {
+            np_subscription_t *subscription = subscriptions->data[i];
+            rc = rp_dt_validate_node_xpath(dm_ctx, NULL, subscription->xpath,
+                        NULL, &sub_node);
+            CHECK_RC_LOG_GOTO(rc, cleanup, "Node validation failed for xpath %s", subscription->xpath);
 
-        rc = sr_list_add(nodes, sub_node);
-        CHECK_RC_MSG_GOTO(rc, cleanup, "List add failed");
+            rc = sr_list_add(nodes, sub_node);
+            CHECK_RC_MSG_GOTO(rc, cleanup, "List add failed");
+        }
     }
 
 cleanup:
@@ -770,14 +762,15 @@ rp_dt_xpath_requests_state_data(rp_ctx_t *rp_ctx, rp_session_t *session, dm_sche
             }
         }
 
-        rc = np_get_data_provider_subscriptions(rp_ctx->np_ctx, schema_info->module_name, &state_data_ctx->subscriptions, &state_data_ctx->subscription_cnt);
+        rc = np_get_data_provider_subscriptions(rp_ctx->np_ctx, session, schema_info->module_name, &state_data_ctx->subscriptions);
         CHECK_RC_MSG_GOTO(rc, cleanup, "Get data provider subscriptions failed");
 
-        if (0 == state_data_ctx->subscription_cnt) {
+        if (NULL == state_data_ctx->subscriptions || 0 == state_data_ctx->subscriptions->count) {
             goto cleanup;
         }
 
-        rc = rp_dt_subscriptions_to_schema_nodes(rp_ctx->dm_ctx, state_data_ctx->subscriptions, state_data_ctx->subscription_cnt, &session->state_data_ctx.subscription_nodes);
+        rc = rp_dt_subscriptions_to_schema_nodes(rp_ctx->dm_ctx, state_data_ctx->subscriptions,
+                &session->state_data_ctx.subscription_nodes);
         CHECK_RC_MSG_GOTO(rc, cleanup, "Subscriptions to schema nodes failed");
     }
 
@@ -803,10 +796,12 @@ rp_dt_find_subscription_covering_subtree(rp_session_t *rp_session, struct lys_no
     }
 
     bool match = false;
-    size_t match_index = 0;
+    size_t cnt = 0, match_index = 0;
     int match_difference = -1;
 
-    for (size_t j = 0; j < rp_session->state_data_ctx.subscription_cnt; j++) {
+    cnt = (NULL != rp_session->state_data_ctx.subscriptions) ? rp_session->state_data_ctx.subscriptions->count : 0;
+
+    for (size_t j = 0; j < cnt; j++) {
         struct lys_node *subs = (struct lys_node *) rp_session->state_data_ctx.subscription_nodes->data[j];
         size_t depth = 0;
         if (rp_dt_depth_under_subtree(subs, subtree_node, &depth)) {
@@ -839,9 +834,11 @@ rp_dt_find_exact_match_subscription_for_node(rp_session_t *rp_session, struct ly
     }
 
     bool match = false;
-    size_t match_index = 0;
+    size_t cnt = 0, match_index = 0;
 
-    for (size_t j = 0; j < rp_session->state_data_ctx.subscription_cnt; j++) {
+    cnt = (NULL != rp_session->state_data_ctx.subscriptions) ? rp_session->state_data_ctx.subscriptions->count : 0;
+
+    for (size_t j = 0; j < cnt; j++) {
         struct lys_node *sub = (struct lys_node *) rp_session->state_data_ctx.subscription_nodes->data[j];
         if (sub->nodetype != node->nodetype) {
             continue;
@@ -871,9 +868,12 @@ rp_dt_has_parent_list(struct lys_node *node, struct lys_node **found_list, size_
 {
     if (NULL != node) {
         struct lys_node *n = node->parent;
-        size_t dep = 1;
+        size_t dep = 0;
 
         while (NULL != n) {
+            if (0 == (LYS_USES & n->nodetype)) {
+                dep++;
+            }
             if (LYS_LIST & n->nodetype) {
                 if (NULL != depth) {
                     *depth = dep;
@@ -884,7 +884,6 @@ rp_dt_has_parent_list(struct lys_node *node, struct lys_node **found_list, size_
                 return true;
             }
             n = lys_parent(n);
-            dep++;
         }
     }
     return false;
@@ -945,7 +944,9 @@ rp_dt_send_request_to_dp_subscription(rp_ctx_t *rp_ctx, rp_session_t *rp_session
     struct lys_node *parent_list = NULL;
     size_t list_depth = 0;
     size_t xp_cnt = 0;
+    np_subscription_t *subscription = NULL;
 
+    subscription = rp_session->state_data_ctx.subscriptions->data[subscription_index];
 
     if (rp_dt_has_parent_list(sch_node, &parent_list, &list_depth)) {
         SR_LOG_DBG("State data is nested in configuration list %s", xp);
@@ -995,10 +996,10 @@ rp_dt_send_request_to_dp_subscription(rp_ctx_t *rp_ctx, rp_session_t *rp_session
 
             snprintf(request_xp, len, "%s/%s", xpaths[i], ptr);
 
-            rc = np_data_provider_request(rp_ctx->np_ctx, rp_session->state_data_ctx.subscriptions[subscription_index], rp_session, request_xp);
+            rc = np_data_provider_request(rp_ctx->np_ctx, subscription, rp_session, request_xp);
             SR_LOG_DBG("Sending request for state data: %s", request_xp);
             if (SR_ERR_OK != rc) {
-                SR_LOG_WRN("Request for operational data failed with xpath %s on subscription %s", request_xp, rp_session->state_data_ctx.subscriptions[subscription_index]->xpath);
+                SR_LOG_WRN("Request for operational data failed with xpath %s on subscription %s", request_xp, subscription->xpath);
                 free(request_xp);
             } else {
                 rp_session->dp_req_waiting += 1;
@@ -1009,10 +1010,10 @@ rp_dt_send_request_to_dp_subscription(rp_ctx_t *rp_ctx, rp_session_t *rp_session
         xp = NULL;
 
     } else {
-        rc = np_data_provider_request(rp_ctx->np_ctx, rp_session->state_data_ctx.subscriptions[subscription_index], rp_session, xp);
+        rc = np_data_provider_request(rp_ctx->np_ctx, subscription, rp_session, xp);
         SR_LOG_DBG("Sending request for state data: %s", xp);
         if (SR_ERR_OK != rc) {
-            SR_LOG_WRN("Request for operational data failed with xpath %s on subscription %s", xp, rp_session->state_data_ctx.subscriptions[subscription_index]->xpath);
+            SR_LOG_WRN("Request for operational data failed with xpath %s on subscription %s", xp, subscription->xpath);
         } else {
             rp_session->dp_req_waiting += 1;
             rc = sr_list_add(rp_session->state_data_ctx.requested_xpaths, xp);
@@ -1069,7 +1070,8 @@ rp_dt_send_first_set_of_dp_requests(rp_ctx_t *rp_ctx, rp_session_t *rp_session)
 
         } else if (LYS_CONTAINER & subtree_node->nodetype) {
             SR_LOG_DBG("Subscription covering subtree not found, looking for a subscription covering at least part of subtree %s", subtree);
-            for (size_t j = 0; j < rp_session->state_data_ctx.subscription_cnt; j++) {
+            size_t cnt = (NULL != rp_session->state_data_ctx.subscriptions) ? rp_session->state_data_ctx.subscriptions->count : 0;
+            for (size_t j = 0; j < cnt; j++) {
                 struct lys_node *subs = (struct lys_node *) rp_session->state_data_ctx.subscription_nodes->data[j];
                 size_t depth = 0;
                 if (rp_dt_depth_under_subtree(subtree_node, subs, &depth)) {
@@ -1124,17 +1126,28 @@ rp_dt_send_first_set_of_dp_requests(rp_ctx_t *rp_ctx, rp_session_t *rp_session)
                     rc = sr_gpb_internal_req_alloc(NULL, SR__OPERATION__INTERNAL_STATE_DATA, &req);
                     CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to allocate internal message");
 
-                    req->internal_request->internal_state_data_req->request_id = (intptr_t) rp_session->req;
+                    req->internal_request->internal_state_data_req->request_id = rp_session->req->request->_id;
 
-                    rc = sr_mem_edit_string((sr_mem_ctx_t *)req->_sysrepo_mem_ctx, &req->internal_request->internal_state_data_req->xpath, subtree);
+                    rc = sr_mem_edit_string((sr_mem_ctx_t *)req->_sysrepo_mem_ctx,
+                            &req->internal_request->internal_state_data_req->xpath, subtree);
                     CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to set string");
 
                     rc = rp_msg_process(rp_ctx, rp_session, req);
+                    SR_LOG_DBG("Enqueued an internal message to obtain state data for request: %" PRIu64,
+                            rp_session->req->request->_id);
                     req = NULL;
                     CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to enqueue message");
 
                     /* increment counter for waiting dp request */
                     rp_session->dp_req_waiting++;
+
+                    /* mark the subtree to be cleaned up before next call */
+                    xp = strdup((char *) rp_session->state_data_ctx.subtrees->data[i]);
+                    CHECK_NULL_NOMEM_GOTO(xp, rc, cleanup);
+
+                    rc = sr_list_add(rp_session->loaded_state_data[rp_session->datastore], xp);
+                    CHECK_RC_MSG_GOTO(rc, cleanup, "List add failed");
+                    xp = NULL;
                     continue;
                 }
             }
@@ -1288,10 +1301,10 @@ cleanup:
     if (SR_ERR_NOT_FOUND == rc || (SR_ERR_OK == rc && NULL == data_tree)) {
         rc = rp_dt_validate_node_xpath(rp_ctx->dm_ctx, rp_session->dm_session, xpath, NULL, NULL);
         if (SR_ERR_OK != rc) {
-            /* Print warning only, because we are not able to validate all xpath */
-            SR_LOG_WRN("Validation of xpath %s was not successful", xpath);
+            SR_LOG_ERR("Validation of xpath %s failed.", xpath);
+        } else {
+            rc = SR_ERR_NOT_FOUND;
         }
-        rc = SR_ERR_NOT_FOUND;
     } else if (SR_ERR_UNAUTHORIZED == rc) {
         rc = SR_ERR_NOT_FOUND;
     } else if (SR_ERR_OK != rc) {
@@ -1335,11 +1348,12 @@ rp_dt_get_values_wrapper(rp_ctx_t *rp_ctx, rp_session_t *rp_session, sr_mem_ctx_
 
 cleanup:
     if (SR_ERR_NOT_FOUND == rc || (SR_ERR_OK == rc && (0 == count || NULL == data_tree))) {
-        if (SR_ERR_OK != rp_dt_validate_node_xpath(rp_ctx->dm_ctx, rp_session->dm_session, xpath, NULL, NULL)) {
-            /* Print warning only, because we are not able to validate all xpath */
-            SR_LOG_WRN("Validation of xpath %s was not successful", xpath);
+        rc = rp_dt_validate_node_xpath(rp_ctx->dm_ctx, rp_session->dm_session, xpath, NULL, NULL);
+        if (SR_ERR_OK != rc) {
+            SR_LOG_ERR("Validation of xpath %s failed.", xpath);
+        } else {
+            rc = SR_ERR_NOT_FOUND;
         }
-        rc = SR_ERR_NOT_FOUND;
     } else if (SR_ERR_UNAUTHORIZED == rc) {
         rc = SR_ERR_NOT_FOUND;
     }
@@ -1392,10 +1406,10 @@ cleanup:
     if (SR_ERR_NOT_FOUND == rc || (SR_ERR_OK == rc && (0 == count || NULL == data_tree))) {
         rc = rp_dt_validate_node_xpath(rp_ctx->dm_ctx, rp_session->dm_session, xpath, NULL, NULL);
         if (SR_ERR_OK != rc) {
-            /* Print warning only, because we are not able to validate all xpath */
-            SR_LOG_WRN("Validation of xpath %s was not successful", xpath);
+            SR_LOG_ERR("Validation of xpath %s failed.", xpath);
+        } else {
+            rc = SR_ERR_NOT_FOUND;
         }
-        rc = SR_ERR_NOT_FOUND;
     } else if (SR_ERR_UNAUTHORIZED == rc) {
         rc = SR_ERR_NOT_FOUND;
     } else if (SR_ERR_OK != rc) {
@@ -1435,10 +1449,10 @@ cleanup:
     if (SR_ERR_NOT_FOUND == rc || (SR_ERR_OK == rc && NULL == data_tree)) {
         rc = rp_dt_validate_node_xpath(rp_ctx->dm_ctx, rp_session->dm_session, xpath, NULL, NULL);
         if (SR_ERR_OK != rc) {
-            /* Print warning only, because we are not able to validate all xpath */
-            SR_LOG_WRN("Validation of xpath %s was not successful", xpath);
+            SR_LOG_ERR("Validation of xpath %s failed.", xpath);
+        } else {
+            rc = SR_ERR_NOT_FOUND;
         }
-        rc = SR_ERR_NOT_FOUND;
     } else if (SR_ERR_UNAUTHORIZED == rc) {
         rc = SR_ERR_NOT_FOUND;
     } else if (SR_ERR_OK != rc) {
@@ -1480,10 +1494,10 @@ cleanup:
     if (SR_ERR_NOT_FOUND == rc || (SR_ERR_OK == rc && NULL == data_tree)) {
         rc = rp_dt_validate_node_xpath(rp_ctx->dm_ctx, rp_session->dm_session, xpath, NULL, NULL);
         if (SR_ERR_OK != rc) {
-            /* Print warning only, because we are not able to validate all xpath */
-            SR_LOG_WRN("Validation of xpath %s was not successful", xpath);
+            SR_LOG_ERR("Validation of xpath %s failed.", xpath);
+        } else {
+            rc = SR_ERR_NOT_FOUND;
         }
-        rc = SR_ERR_NOT_FOUND;
     } else if (SR_ERR_UNAUTHORIZED == rc) {
         rc = SR_ERR_NOT_FOUND;
     } else if (SR_ERR_OK != rc) {
@@ -1526,11 +1540,12 @@ rp_dt_get_subtrees_wrapper(rp_ctx_t *rp_ctx, rp_session_t *rp_session, sr_mem_ct
 
 cleanup:
     if (SR_ERR_NOT_FOUND == rc || (SR_ERR_OK == rc && (0 == count || NULL == data_tree))) {
-        if (SR_ERR_OK != rp_dt_validate_node_xpath(rp_ctx->dm_ctx, rp_session->dm_session, xpath, NULL, NULL)) {
-            /* Print warning only, because we are not able to validate all xpath */
-            SR_LOG_WRN("Validation of xpath %s was not successful", xpath);
+        rc = rp_dt_validate_node_xpath(rp_ctx->dm_ctx, rp_session->dm_session, xpath, NULL, NULL);
+        if (SR_ERR_OK != rc) {
+            SR_LOG_ERR("Validation of xpath %s failed.", xpath);
+        } else {
+            rc = SR_ERR_NOT_FOUND;
         }
-        rc = SR_ERR_NOT_FOUND;
     } else if (SR_ERR_UNAUTHORIZED == rc) {
         rc = SR_ERR_NOT_FOUND;
     }
@@ -1572,11 +1587,12 @@ rp_dt_get_subtrees_wrapper_with_opts(rp_ctx_t *rp_ctx, rp_session_t *rp_session,
 
 cleanup:
     if (SR_ERR_NOT_FOUND == rc || (SR_ERR_OK == rc && (0 == count || NULL == data_tree))) {
-        if (SR_ERR_OK != rp_dt_validate_node_xpath(rp_ctx->dm_ctx, rp_session->dm_session, xpath, NULL, NULL)) {
-            /* Print warning only, because we are not able to validate all xpath */
-            SR_LOG_WRN("Validation of xpath %s was not successful", xpath);
+        rc = rp_dt_validate_node_xpath(rp_ctx->dm_ctx, rp_session->dm_session, xpath, NULL, NULL);
+        if (SR_ERR_OK != rc) {
+            SR_LOG_ERR("Validation of xpath %s failed.", xpath);
+        } else {
+            rc = SR_ERR_NOT_FOUND;
         }
-        rc = SR_ERR_NOT_FOUND;
     } else if (SR_ERR_UNAUTHORIZED == rc) {
         rc = SR_ERR_NOT_FOUND;
     }

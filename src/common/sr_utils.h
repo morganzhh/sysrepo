@@ -170,6 +170,30 @@ void sr_str_trim(char *str);
 uint32_t sr_str_hash(const char *str);
 
 /**
+ * @brief Print to allocated string. This is an implementation of vasprintf() which is only a GNU/BSD
+ * extension and not defined by POSIX, even though it is quite usefull in many cases.
+ *
+ * @param [out] strp A newly allocated string is returned via this pointer.
+ * @param [in] fmt Format string.
+ * @param [in] ap Sequence of additional arguments, each containing a value to be used to replace
+ *                a format specifier in the format string
+ * @return Error code (SR_ERR_OK on success)
+ */
+int sr_vasprintf(char **strp, const char *fmt, va_list ap);
+
+/**
+ * @brief Print to allocated string. This is an implementation of asprintf() which is only a GNU/BSD
+ * extension and not defined by POSIX, even though it is quite usefull in many cases.
+ *
+ * @param [out] strp A newly allocated string is returned via this pointer.
+ * @param [in] fmt Format string.
+ * @param [in] ... Sequence of additional arguments, each containing a value to be used to replace
+ *                 a format specifier in the format string
+ * @return Error code (SR_ERR_OK on success)
+ */
+int sr_asprintf(char **strp, const char *fmt, ...);
+
+/**
  * @brief Copies the first string from the beginning of the xpath up to the first colon,
  * that represents the name of the data file.
  * @param [in] xpath
@@ -218,6 +242,18 @@ int sr_get_lock_data_file_name(const char *data_search_dir, const char *module_n
  * @return Error code (SR_ERR_OK on success)
  */
 int sr_get_persist_data_file_name(const char *data_search_dir, const char *module_name, char **file_name);
+
+/**
+ * @brief Creates the file name of the persistent data file into the provided buffer.
+ *
+ * @param [in] data_search_dir Path to the directory with data files.
+ * @param [in] module_name Name of the module.
+ * @param [in,out] buff Buffer where file name will be written.
+ * @param [in] buff_len Size of the buffer.
+ *
+ * @return Error code (SR_ERR_OK on success)
+ */
+int sr_get_persist_data_file_name_buf(const char *data_search_dir, const char *module_name, char *buff, size_t buff_len);
 
 /**
  * @brief Creates the data file name corresponding to the module_name (schema).
@@ -348,6 +384,19 @@ struct lys_node *sr_lys_node_get_data_parent(struct lys_node *node, bool augment
  * @return duplicated datatree or NULL in case of error
  */
 struct lyd_node* sr_dup_datatree(struct lyd_node *root);
+
+/**
+ * @brief Duplicates the date tree including its sibling into the provided context
+ *
+ * @note duplication might fails if the data tree contains a node that uses a schema
+ * not loaded in destination context (unresolved instance ids do not cause problem).
+ * consider calling ::dm_remove_added_data_trees_by_module_name or ::dm_remove_added_data_trees
+ *
+ * @param [in] root Data tree to be duplicated
+ * @param [in] ctx Destination context where the data tree should be duplicated to
+ * @return duplicated data tree using the provided context
+ */
+struct lyd_node* sr_dup_datatree_to_ctx(struct lyd_node *root, struct ly_ctx *ctx);
 
 /**
  * lyd_unlink wrapper handles the unlink of the root_node
@@ -680,6 +729,54 @@ int sr_print(sr_print_ctx_t *print_ctx, const char *format, ...);
 int sr_create_uri_for_module(const struct lys_module *module, char **uri);
 
 /**
+ * @brief Get username from UID.
+ *
+ * @param [in] uid UID of the user to get the name of.
+ * @param [out] username Returned username. Deallocate with ::free.
+ */
+int sr_get_user_name(uid_t uid, char **username);
+
+/**
+ * @brief Lookup UID and primary GID in the password database by username.
+ *
+ * @param [in] username Name of the user to search for.
+ * @param [out] uid ID of the user whose name matches the given username.
+ * @param [out] gid ID of the primary group of the matching user.
+ */
+int sr_get_user_id(const char *username, uid_t *uid, gid_t *gid);
+
+/**
+ * @brief Get groupname from GID.
+ *
+ * @param [in] gid GID of the group to get the name of.
+ * @param [out] groupname Returned groupname. Deallocate with ::free.
+ */
+int sr_get_group_name(uid_t uid, char **groupname);
+
+/**
+ * @brief Lookup GID in the group database by groupname.
+ *
+ * @param [in] groupname Name of the group to search for.
+ * @param [out] gid ID of the group with matching groupname.
+ */
+int sr_get_group_id(const char *groupname, gid_t *gid);
+
+/**
+ * @brief Returns an array of all system groups that the given user is member of.
+ *
+ * @param [in] username Name of the user to search for in the group database.
+ * @param [out] groups Array of groups (their names) that the user is member of.
+ * @param [out] group_cnt Number of returned groups.
+ */
+int sr_get_user_groups(const char *username, char ***groups, size_t *group_cnt);
+
+/**
+ * @brief Frees the list and that contains allocated strings (they are freed as well).
+ * @param [in] list
+ */
+void sr_free_list_of_strings(sr_list_t *list);
+
+/*
  * @brief Converts time_t into string formatted as date-and-time type defined in RFC 6991.
  *
  * @param [in] time Time to be coverted into string.
@@ -699,21 +796,6 @@ int sr_time_to_str(time_t time, char *buff, size_t buff_size);
  * @return Error code (SR_ERR_OK on success)
  */
 int sr_str_to_time(char *time_str, time_t *time);
-
-/*
- * @brief Returns an array of all system groups that the given user is member of.
- *
- * @param [in] username Name of the user to search for in the group database.
- * @param [out] groups Array of groups (their names) that the user is member of.
- * @param [out] group_cnt Number of returned groups.
- */
-int sr_get_system_groups(const char *username, char ***groups, size_t *group_cnt);
-
-/**
- * @brief Frees the list and that contains allocated strings (they are freed as well).
- * @param [in] list
- */
-void sr_free_list_of_strings(sr_list_t *list);
 
 /**@} utils */
 

@@ -275,19 +275,19 @@ public:
     int dp_get_items(const char *xpath, sr_val_t **values, size_t *values_cnt, void *private_ctx) {
         PyObject *arglist;
 
-        Vals *in_vals =(Vals *)new Vals(values, values_cnt, NULL);
-        shared_ptr<Vals> *shared_in_vals = in_vals ? new shared_ptr<Vals>(in_vals) : 0;
-        PyObject *in = SWIG_NewPointerObj(SWIG_as_voidptr(shared_in_vals), SWIGTYPE_p_std__shared_ptrT_Vals_t, SWIG_POINTER_DISOWN);
+        Vals_Holder *out_vals =(Vals_Holder *)new Vals_Holder(values, values_cnt);
+        shared_ptr<Vals_Holder> *shared_out_vals = out_vals ? new shared_ptr<Vals_Holder>(out_vals) : 0;
+        PyObject *out = SWIG_NewPointerObj(SWIG_as_voidptr(shared_out_vals), SWIGTYPE_p_std__shared_ptrT_Vals_Holder_t, SWIG_POINTER_DISOWN);
 
         PyObject *p =  SWIG_NewPointerObj(private_ctx, SWIGTYPE_p_void, 0);
-        arglist = Py_BuildValue("(sOO)", xpath, in, p);
+        arglist = Py_BuildValue("(sOO)", xpath, out, p);
         PyObject *result = PyEval_CallObject(_callback, arglist);
         Py_DECREF(arglist);
         if (result == NULL) {
-            in_vals->~Vals();
+            out_vals->~Vals_Holder();
             throw std::runtime_error("Python callback dp_get_items failed.\n");
         } else {
-            in_vals->~Vals();
+            out_vals->~Vals_Holder();
             int ret = SR_ERR_OK;
             if (result && PyInt_Check(result)) {
                 ret = PyInt_AsLong(result);
@@ -426,14 +426,11 @@ static void g_event_notif_tree_cb(const sr_ev_notif_type_t notif_type, const cha
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_module_change_subscribe(self->swig_sess->get(), module_name, g_module_change_subscribe_cb, \
-                                             class_ctx, priority, opts, &self->swig_sub);
+        int ret = sr_module_change_subscribe(self->swig_sess(), module_name, g_module_change_subscribe_cb, \
+                                             class_ctx, priority, opts, self->swig_sub());
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
         }
@@ -445,14 +442,11 @@ static void g_event_notif_tree_cb(const sr_ev_notif_type_t notif_type, const cha
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_subtree_change_subscribe(self->swig_sess->get(), xpath, g_subtree_change_cb, class_ctx,\
-                                              priority, opts, &self->swig_sub);
+        int ret = sr_subtree_change_subscribe(self->swig_sess(), xpath, g_subtree_change_cb, class_ctx,\
+                                              priority, opts, self->swig_sub());
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
         }
@@ -464,14 +458,11 @@ static void g_event_notif_tree_cb(const sr_ev_notif_type_t notif_type, const cha
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret =  sr_module_install_subscribe(self->swig_sess->get(), g_module_install_cb, class_ctx,
-                                               opts, &self->swig_sub);
+        int ret =  sr_module_install_subscribe(self->swig_sess(), g_module_install_cb, class_ctx,
+                                               opts, self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
@@ -484,14 +475,11 @@ static void g_event_notif_tree_cb(const sr_ev_notif_type_t notif_type, const cha
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_feature_enable_subscribe(self->swig_sess->get(), g_feature_enable_cb, class_ctx,
-                                              opts, &self->swig_sub);
+        int ret = sr_feature_enable_subscribe(self->swig_sess(), g_feature_enable_cb, class_ctx,
+                                              opts, self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
@@ -503,14 +491,11 @@ static void g_event_notif_tree_cb(const sr_ev_notif_type_t notif_type, const cha
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_rpc_subscribe(self->swig_sess->get(), xpath, g_rpc_cb, class_ctx, opts,\
-                                   &self->swig_sub);
+        int ret = sr_rpc_subscribe(self->swig_sess(), xpath, g_rpc_cb, class_ctx, opts,\
+                                   self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
@@ -522,14 +507,11 @@ static void g_event_notif_tree_cb(const sr_ev_notif_type_t notif_type, const cha
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_action_subscribe(self->swig_sess->get(), xpath, g_action_cb, class_ctx, opts,\
-                                   &self->swig_sub);
+        int ret = sr_action_subscribe(self->swig_sess(), xpath, g_action_cb, class_ctx, opts,\
+                                   self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
@@ -541,14 +523,11 @@ static void g_event_notif_tree_cb(const sr_ev_notif_type_t notif_type, const cha
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_rpc_subscribe_tree(self->swig_sess->get(), xpath, g_rpc_tree_cb, class_ctx, opts,\
-                                   &self->swig_sub);
+        int ret = sr_rpc_subscribe_tree(self->swig_sess(), xpath, g_rpc_tree_cb, class_ctx, opts,\
+                                   self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
@@ -560,14 +539,11 @@ static void g_event_notif_tree_cb(const sr_ev_notif_type_t notif_type, const cha
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_action_subscribe_tree(self->swig_sess->get(), xpath, g_action_tree_cb, class_ctx, opts,\
-                                   &self->swig_sub);
+        int ret = sr_action_subscribe_tree(self->swig_sess(), xpath, g_action_tree_cb, class_ctx, opts,\
+                                   self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
@@ -579,14 +555,11 @@ static void g_event_notif_tree_cb(const sr_ev_notif_type_t notif_type, const cha
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_event_notif_subscribe(self->swig_sess->get(), xpath, g_event_notif_cb, class_ctx, opts,\
-                                   &self->swig_sub);
+        int ret = sr_event_notif_subscribe(self->swig_sess(), xpath, g_event_notif_cb, class_ctx, opts,\
+                                   self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
@@ -598,14 +571,11 @@ static void g_event_notif_tree_cb(const sr_ev_notif_type_t notif_type, const cha
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_event_notif_subscribe_tree(self->swig_sess->get(), xpath, g_event_notif_tree_cb,\
-                                                class_ctx, opts, &self->swig_sub);
+        int ret = sr_event_notif_subscribe_tree(self->swig_sess(), xpath, g_event_notif_tree_cb,\
+                                                class_ctx, opts, self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));
@@ -617,14 +587,11 @@ static void g_event_notif_tree_cb(const sr_ev_notif_type_t notif_type, const cha
         Wrap_cb *class_ctx = NULL;
         class_ctx = new Wrap_cb(callback);
 
-        if (class_ctx == NULL)
-            throw std::runtime_error("Ne enough space for helper class!\n");
-
         self->wrap_cb_l.push_back(class_ctx);
         class_ctx->private_ctx = private_ctx;
 
-        int ret = sr_dp_get_items_subscribe(self->swig_sess->get(), xpath, g_dp_get_items_cb, class_ctx,\
-                                            opts, &self->swig_sub);
+        int ret = sr_dp_get_items_subscribe(self->swig_sess(), xpath, g_dp_get_items_cb, class_ctx,\
+                                            opts, self->swig_sub());
 
         if (SR_ERR_OK != ret) {
             throw std::runtime_error(sr_strerror(ret));

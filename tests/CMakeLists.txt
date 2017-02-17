@@ -22,11 +22,13 @@ include_directories (
 )
 
 find_program(valgrind_FOUND valgrind)
+find_program(timeout_FOUND timeout)
 
 add_library(HELPERS OBJECT ${TEST_HELPERS_DIR}rp_dt_context_helper.c
             ${TEST_HELPERS_DIR}test_module_helper.c
             ${TEST_HELPERS_DIR}system_helper.c
             ${TEST_HELPERS_DIR}nacm_module_helper.c)
+add_dependencies(HELPERS COMMON)
 
 # create test target with specified options
 macro(ADD_UNIT_TEST_WITH_OPTS TEST_NAME USE_HELPERS USE_VALGRIND WRAP_FUNCTION)
@@ -42,30 +44,30 @@ macro(ADD_UNIT_TEST_WITH_OPTS TEST_NAME USE_HELPERS USE_VALGRIND WRAP_FUNCTION)
     endif()
 
     target_link_libraries(${TEST_NAME} ${CMOCKA_LIBRARIES} sysrepo_a ${test_link_flags})
-    add_test(${TEST_NAME} ${TEST_NAME})
-    if(valgrind_FOUND)
-       if(${USE_VALGRIND})
-           add_test(${TEST_NAME}_valgrind valgrind
-                --error-exitcode=1 --read-var-info=yes
-                --leak-check=full --show-leak-kinds=all
-                --suppressions=${TEST_HELPERS_DIR}valgrind.supp
-                ./${TEST_NAME})
-       endif(${USE_VALGRIND})
-    endif(valgrind_FOUND)
+    if(timeout_FOUND AND NOT ${CMAKE_C_FLAGS} MATCHES "-fsanitize")
+        add_test(${TEST_NAME} timeout
+            --signal=6 360
+            ./${TEST_NAME})
+    else()
+        add_test(${TEST_NAME} ${TEST_NAME})
+    endif()
+    if(valgrind_FOUND AND ${USE_VALGRIND} AND NOT ${CMAKE_C_FLAGS} MATCHES "-fsanitize")
+        add_test(${TEST_NAME}_valgrind valgrind
+            --error-exitcode=1 --read-var-info=yes
+            --leak-check=full --show-leak-kinds=all
+            --suppressions=${TEST_HELPERS_DIR}valgrind.supp
+            ./${TEST_NAME})
+    endif()
+    add_dependencies(${TEST_NAME} COMMON)
 endmacro(ADD_UNIT_TEST_WITH_OPTS)
 
 # create default test target with valgrind is on
 macro(ADD_UNIT_TEST TEST_NAME USE_HELPERS)
-    if (${CMAKE_C_FLAGS} MATCHES "-fsanitize=")
-        set(tests_with_valgrind 0)
-    else()
-        set(tests_with_valgrind 1)
-    endif()
-    ADD_UNIT_TEST_WITH_OPTS(${TEST_NAME} ${USE_HELPERS} ${tests_with_valgrind} "")
+    ADD_UNIT_TEST_WITH_OPTS(${TEST_NAME} ${USE_HELPERS} "1" "")
 endmacro(ADD_UNIT_TEST)
 
 
-ADD_UNIT_TEST(common_test 0)
+ADD_UNIT_TEST(common_test 1)
 ADD_UNIT_TEST(xpath_utils_test 1)
 ADD_UNIT_TEST(ac_test 1)
 if(USE_SR_MEM_MGMT)
@@ -74,7 +76,7 @@ endif(USE_SR_MEM_MGMT)
 ADD_UNIT_TEST(values_test 1)
 ADD_UNIT_TEST(trees_test 1)
 
-ADD_UNIT_TEST(cm_sm_test 0)
+ADD_UNIT_TEST(cm_sm_test 1)
 IF (NOT ${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
     ADD_UNIT_TEST_WITH_OPTS(np_test 1 1 "cm_msg_send")
     ADD_UNIT_TEST_WITH_OPTS(pm_test 1 1 "cm_msg_send")
@@ -82,7 +84,7 @@ ENDIF()
 
 ADD_UNIT_TEST(dm_test 1)
 
-ADD_UNIT_TEST(rp_dt_xpath_test 0)
+ADD_UNIT_TEST(rp_dt_xpath_test 1)
 ADD_UNIT_TEST(rp_datatree_test 1)
 ADD_UNIT_TEST(rp_dt_edit_test 1)
 ADD_UNIT_TEST(rp_dt_running_test 1)
@@ -94,21 +96,24 @@ if("${TEST_REPOSITORY_LOC}" STREQUAL "${REPOSITORY_LOC}")
     # global procject's repository location
 
     ADD_UNIT_TEST(cm_test 1)
-    ADD_UNIT_TEST(rp_test 0)
+    ADD_UNIT_TEST(rp_test 1)
+    if(ENABLE_NACM)
+        ADD_UNIT_TEST(nacm_test 1)
+    endif(ENABLE_NACM)
 
     ADD_UNIT_TEST(cl_test 1)
     ADD_UNIT_TEST(cl_notifications_test 1)
     ADD_UNIT_TEST(cl_state_data_test 1)
     ADD_UNIT_TEST(cl_fd_watcher_test 1)
+    if(ENABLE_NACM)
+        ADD_UNIT_TEST(nacm_cl_test 1)
+    endif(ENABLE_NACM)
     ADD_UNIT_TEST(concurr_test 1)
     ADD_UNIT_TEST_WITH_OPTS(perf_test 1 0 "")
-    ADD_UNIT_TEST_WITH_OPTS(daemon_test 0 0 "")
-    ADD_UNIT_TEST_WITH_OPTS(plugin_daemon_test 0 0 "")
+    ADD_UNIT_TEST_WITH_OPTS(daemon_test 1 0 "")
+    ADD_UNIT_TEST_WITH_OPTS(plugin_daemon_test 1 0 "")
     ADD_UNIT_TEST_WITH_OPTS(sysrepoctl_test 1 0 "")
     ADD_UNIT_TEST_WITH_OPTS(sysrepocfg_test 1 0 "")
-    if(ENABLE_NACM)
-        ADD_UNIT_TEST(nacm_test 1)
-    endif(ENABLE_NACM)
 
     ADD_CUSTOM_COMMAND(
         TARGET sysrepocfg_test
@@ -169,6 +174,7 @@ INSTALL_YANG_FOR_TESTS("referenced-data")
 INSTALL_YANG_FOR_TESTS("cross-module")
 INSTALL_YANG_FOR_TESTS("turing-machine")
 INSTALL_YANG_FOR_TESTS("ietf-netconf-notifications")
+INSTALL_YANG_FOR_TESTS("nc-notifications")
 INSTALL_YANG_FOR_TESTS("servers")
 
 

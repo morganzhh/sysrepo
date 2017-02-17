@@ -29,40 +29,178 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <fcntl.h>
 #include <pwd.h>
 #include <setjmp.h>
 #include <cmocka.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #ifdef HAVE_REGEX_H
 #include <regex.h>
 #endif
 #include <execinfo.h>
-
+#include <pthread.h>
 #define EXPECTED_MAX_FILE_SIZE 512
 
-static void
+/**
+ * @brief Context for watchdog thread.
+ */
+typedef struct watchgod_ctx_s {
+    volatile int runtime_limit;
+    volatile bool exit;
+    volatile bool running;
+    pthread_t thread;
+    pthread_mutex_t lock1, lock2;
+    pthread_cond_t cond1, cond2;
+} watchdog_ctx_t;
+
+
+/**
+ * @brief A global instance of the watchdog context.
+ */
+static watchdog_ctx_t watchdog_ctx = {0, false, false};
+
+/**
+ * @brief A custom implementation of ::popen that hopefully doesn't
+ * suffer from this glibc bug: https://bugzilla.redhat.com/show_bug.cgi?id=1275384
+ */
+pid_t
+sr_popen(const char *command, int *stdin_p, int *stdout_p, int *stderr_p)
+{
+#define READ 0
+#define WRITE 1
+    int p_stdin[2], p_stdout[2], p_stderr[2];
+    pid_t pid;
+
+    if ((stdin_p && 0 != pipe(p_stdin)) || (stdout_p && 0 != pipe(p_stdout)) ||
+        (stderr_p && 0 != pipe(p_stderr))) {
+        return -1;
+    }
+
+    pid = fork();
+
+    if (pid < 0) {
+        return pid;
+    } else if (pid == 0) {
+        if (stdin_p) {
+            close(p_stdin[WRITE]);
+            dup2(p_stdin[READ], STDIN_FILENO);
+        }
+        if (stdout_p) {
+            close(p_stdout[READ]);
+            dup2(p_stdout[WRITE], STDOUT_FILENO);
+        }
+        if (stderr_p) {
+            close(p_stderr[READ]);
+            dup2(p_stderr[WRITE], STDERR_FILENO);
+        }
+
+        execl("/bin/sh", "sh", "-c", command, NULL);
+        perror("execl");
+        exit(1);
+    } else {
+        if (stdin_p) {
+            close(p_stdin[READ]);
+        }
+        if (stdout_p) {
+            close(p_stdout[WRITE]);
+        }
+        if (stderr_p) {
+            close(p_stderr[WRITE]);
+        }
+    }
+
+    if (stdin_p != NULL) {
+        *stdin_p = p_stdin[WRITE];
+    }
+
+    if (stdout_p != NULL) {
+        *stdout_p = p_stdout[READ];
+    }
+
+    if (stderr_p != NULL) {
+        *stderr_p = p_stderr[READ];
+    }
+
+    return pid;
+}
+
+size_t readline(int fd, char **line_p, size_t *len_p)
+{
+    size_t n = 0, ret = 0;
+    size_t len = 0;
+    char c = '\0', *line = NULL;
+
+    assert_non_null(line_p);
+    assert_non_null(len_p);
+
+    line = *line_p;
+    len = *len_p;
+    if (NULL == line || 0 == len) {
+        len = 10;
+        line = calloc(len, sizeof *line);
+        assert_non_null(line);
+    }
+
+    do {
+        ret = read(fd, &c, 1);
+        if (1 == ret) {
+            if (n == len-1) {
+                len *= 2;
+                line = realloc(line, len * (sizeof *line));
+                assert_non_null(line);
+            }
+            line[n] = c;
+            ++n;
+            if (c == '\n') {
+                break; /* newline is stored, like fgets() */
+            }
+        } else if (0 == ret) {
+            break; /* EOF */
+        } else {
+            if (EWOULDBLOCK == errno || EAGAIN == errno) {
+                break; /* non-blocking file descriptor */
+            }
+            assert_int_equal(EINTR, errno);
+            continue;
+        }
+    } while (true);
+
+    line[n] = '\0'; /* null terminate like fgets() */
+    *line_p = line;
+    *len_p = len;
+    return n;
+}
+
+void
 print_backtrace()
 {
 #ifdef __linux__
     void *callstack[128] = { 0, };
     int frames = 0;
     char **messages = NULL;
-    char buff[1024] = { 0, };
+    char cmd[PATH_MAX] = { 0, };
+    char buff[PATH_MAX] = { 0, };
     char *parenthesis = NULL;
-    FILE *fp = { 0, };
+    pid_t child = 0;
+    int fd = 0, status = 0;
 
     frames = backtrace(callstack, 128);
     messages = backtrace_symbols(callstack, frames);
 
     for (int i = 2; i < frames; i++) {
         parenthesis = strchr(messages[i], '(');
-        *parenthesis = '\0';
         if (NULL != parenthesis) {
-            sprintf(buff, "addr2line %p -e %s", callstack[i], messages[i]);
-            fp = popen(buff, "r");
-            fgets(buff, sizeof(buff)-1, fp);
-            pclose(fp);
+            *parenthesis = '\0';
+            snprintf(cmd, PATH_MAX, "addr2line %p -e %s", callstack[i], messages[i]);
+            child = sr_popen(cmd, NULL, &fd, NULL);
+            assert_int_not_equal(-1, child);
+            assert_true(fd >= 0);
+            read(fd, buff, sizeof(buff)-1);
+            close(fd);
+            assert_int_equal(child, waitpid(child, &status, 0));
             *parenthesis = '(';
             fprintf(stderr, "[bt] #%d %s\n        %s", (i - 2), messages[i], buff);
         }
@@ -71,7 +209,7 @@ print_backtrace()
 #endif
 }
 
-static void
+void
 assert_non_null_bt(void *arg)
 {
     if (NULL == arg) {
@@ -80,7 +218,16 @@ assert_non_null_bt(void *arg)
     assert_non_null(arg);
 }
 
-static void
+void
+assert_null_bt(void *arg)
+{
+    if (NULL != arg) {
+        print_backtrace();
+    }
+    assert_null(arg);
+}
+
+void
 assert_true_bt(bool arg)
 {
     if (!arg) {
@@ -89,7 +236,16 @@ assert_true_bt(bool arg)
     assert_true(arg);
 }
 
-static void
+void
+assert_false_bt(bool arg)
+{
+    if (arg) {
+        print_backtrace();
+    }
+    assert_false(arg);
+}
+
+void
 assert_string_equal_bt(const char *a, const char *b)
 {
     if (!a || !b || 0 != strcmp(a, b)) {
@@ -98,13 +254,22 @@ assert_string_equal_bt(const char *a, const char *b)
     assert_string_equal(a, b);
 }
 
-static void
+void
 assert_int_equal_bt(int a, int b)
 {
     if (a != b) {
         print_backtrace();
     }
     assert_int_equal(a, b);
+}
+
+void
+assert_int_not_equal_bt(int a, int b)
+{
+    if (a == b) {
+        print_backtrace();
+    }
+    assert_int_not_equal(a, b);
 }
 
 void
@@ -142,7 +307,7 @@ test_file_permissions(const char *path, mode_t permissions)
 }
 
 static char *
-read_file_content(FILE *fp)
+read_file_content(int fd)
 {
     size_t size = EXPECTED_MAX_FILE_SIZE;
     char *buffer = malloc(size);
@@ -150,12 +315,14 @@ read_file_content(FILE *fp)
     unsigned cur = 0;
 
     for (;;) {
-        size_t n = fread(buffer + cur, 1, size - cur - 1, fp);
+        size_t n = read(fd, buffer + cur, size - cur - 1);
         cur += n;
-        if (size > cur + 1) { break; }
-        size <<= 1;
-        buffer = realloc(buffer, size);
-        assert_non_null(buffer);
+        if (0 == n) { break; }
+        if (cur + 1 == size) {
+            size <<= 1;
+            buffer = realloc(buffer, size);
+            assert_non_null(buffer);
+        }
     }
 
     buffer[cur] = '\0';
@@ -207,40 +374,40 @@ test_file_content_str(const char *file_content, const char *exp_content, bool re
 void
 test_file_content(const char *path, const char *exp_content, bool regex)
 {
-    FILE *fp = NULL;
+    int fd = 0;
     char *buffer = NULL;
 
-    fp = fopen(path, "r");
-    assert_non_null_bt(fp);
+    fd = open(path, O_RDONLY);
+    assert_int_not_equal(-1, fd);
 
-    buffer = read_file_content(fp);
+    buffer = read_file_content(fd);
     test_file_content_str(buffer, exp_content, regex);
 
     free(buffer);
-    fclose(fp);
+    close(fd);
 }
 
 int compare_files(const char *path1, const char *path2)
 {
     int rc = 0;
-    FILE *fp1 = NULL, *fp2 = NULL;
+    int fd1 = 0, fd2 = 0;
 
     /* open */
-    fp1 = fopen(path1, "r");
-    fp2 = fopen(path2, "r");
-    assert_non_null_bt(fp1);
-    assert_non_null_bt(fp2);
+    fd1 = open(path1, O_RDONLY);
+    fd2 = open(path2, O_RDONLY);
+    assert_int_not_equal(-1, fd1);
+    assert_int_not_equal(-1, fd2);
 
     /* read */
-    char *content1 = read_file_content(fp1);
-    char *content2 = read_file_content(fp2);
+    char *content1 = read_file_content(fd1);
+    char *content2 = read_file_content(fd2);
 
     /* compare */
     rc = strcmp(content1, content2);
 
     /* cleanup */
-    fclose(fp1);
-    fclose(fp2);
+    close(fd1);
+    close(fd2);
     free(content1);
     free(content2);
 
@@ -251,19 +418,21 @@ void
 exec_shell_command(const char *cmd, const char *exp_content, bool regex, int exp_ret)
 {
     int ret = 0;
-    FILE *fp = NULL;
     char *buffer = NULL;
     bool retry = false;
     size_t cnt = 0;
+    pid_t child = 0;
+    int fd = 0;
 
     do {
         /* if needed, retry to workaround the fork bug in glibc: https://bugzilla.redhat.com/show_bug.cgi?id=1275384 */
         retry = false;
 
-        fp = popen(cmd, "r");
-        assert_non_null_bt(fp);
+        child = sr_popen(cmd, NULL, &fd, NULL);
+        assert_int_not_equal(-1, child);
+        assert_true(fd >= 0);
 
-        buffer = read_file_content(fp);
+        buffer = read_file_content(fd);
         if ('\0' == buffer[0] && 0 != strcmp(exp_content, ".*")) {
             retry = true;
             cnt++;
@@ -272,9 +441,103 @@ exec_shell_command(const char *cmd, const char *exp_content, bool regex, int exp
         }
 
         free(buffer);
-        ret = pclose(fp);
+        close(fd);
+        assert_int_equal(child, waitpid(child, &ret, 0));
         if (!retry) {
             assert_int_equal_bt(exp_ret, WEXITSTATUS(ret));
         }
     } while (retry && cnt < 10);
+}
+
+static void *
+watchdog_routine(void *arg)
+{
+    (void)arg;
+    struct timespec ts = {0};
+    int ret = 0;
+
+    ts.tv_sec = time(NULL) + watchdog_ctx.runtime_limit;
+
+    /* watchdog_stop cannot signal before watchdog enters pthread_cond_timedwait */
+    ret = pthread_mutex_lock(&watchdog_ctx.lock2);
+    assert_int_equal(0, ret);
+
+    /* signal successful start */
+    ret = pthread_mutex_lock(&watchdog_ctx.lock1);
+    assert_int_equal(0, ret);
+    watchdog_ctx.running = true;
+    ret = pthread_cond_signal(&watchdog_ctx.cond1);
+    assert_int_equal(0, ret);
+    ret = pthread_mutex_unlock(&watchdog_ctx.lock1);
+    assert_int_equal(0, ret);
+
+    /* wait for the program to signal exit */
+    do {
+        ret = pthread_cond_timedwait(&watchdog_ctx.cond2, &watchdog_ctx.lock2, &ts);
+        if (ETIMEDOUT == ret) {
+            fprintf(stderr, "Aborting the test as it has exceeded the runtime limit (%d seconds).",
+                    watchdog_ctx.runtime_limit);
+            abort();
+        } else {
+            assert_int_equal(0, ret);
+        }
+    } while (!watchdog_ctx.exit);
+    pthread_mutex_unlock(&watchdog_ctx.lock2);
+
+    return NULL;
+}
+
+void
+watchdog_start(int runtime_limit)
+{
+    int ret = 0;
+
+    /* initialize watchdog context */
+    watchdog_ctx.runtime_limit = runtime_limit;
+    watchdog_ctx.running = false;
+    watchdog_ctx.exit = false;
+    ret = pthread_mutex_init(&watchdog_ctx.lock1, NULL);
+    assert_int_equal(0, ret);
+    ret = pthread_mutex_init(&watchdog_ctx.lock2, NULL);
+    assert_int_equal(0, ret);
+    ret = pthread_cond_init(&watchdog_ctx.cond1, NULL);
+    assert_int_equal(0, ret);
+    ret = pthread_cond_init(&watchdog_ctx.cond2, NULL);
+    assert_int_equal(0, ret);
+
+    /* start watchdog thread */
+    pthread_mutex_lock(&watchdog_ctx.lock1);
+    ret = pthread_create(&watchdog_ctx.thread, NULL, watchdog_routine, NULL);
+    assert_int_equal(0, ret);
+
+    /* wait for watchdog to start */
+    do {
+        ret = pthread_cond_wait(&watchdog_ctx.cond1, &watchdog_ctx.lock1);
+        assert_int_equal(0, ret);
+    } while (!watchdog_ctx.running);
+    pthread_mutex_unlock(&watchdog_ctx.lock1);
+}
+
+void
+watchdog_stop()
+{
+    int ret = 0;
+
+    /* signal watchdog to exit */
+    ret = pthread_mutex_lock(&watchdog_ctx.lock2);
+    assert_int_equal(0, ret);
+    watchdog_ctx.exit = true;
+    ret = pthread_cond_signal(&watchdog_ctx.cond2);
+    assert_int_equal(0, ret);
+    ret = pthread_mutex_unlock(&watchdog_ctx.lock2);
+    assert_int_equal(0, ret);
+
+    /* wait for watchdog to exit */
+    ret = pthread_join(watchdog_ctx.thread, NULL);
+    assert_int_equal(0, ret);
+
+    pthread_cond_destroy(&watchdog_ctx.cond1);
+    pthread_cond_destroy(&watchdog_ctx.cond2);
+    pthread_mutex_destroy(&watchdog_ctx.lock1);
+    pthread_mutex_destroy(&watchdog_ctx.lock2);
 }

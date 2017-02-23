@@ -1491,6 +1491,7 @@ dm_append_data_tree(dm_ctx_t *dm_ctx, dm_session_t *session, dm_data_info_t *dat
     if (NULL != di->node) {
         ret = lyd_print_mem(&tmp, di->node, LYD_XML, LYP_WITHSIBLINGS);
         CHECK_ZERO_LOG_RETURN(ret, SR_ERR_INTERNAL, "Failed to print data of module %s into string", di->schema->module->name);
+        if (!tmp) return rc;
         tmp_node = lyd_parse_mem(data_info->schema->ly_ctx, tmp, LYD_XML, LYD_OPT_TRUSTED | LYD_OPT_CONFIG);
         if (NULL == tmp_node && LY_SUCCESS != ly_errno) {
             SR_LOG_ERR("Parsing data tree from string failed for module %s failed: %s", module_name, ly_errmsg());

@@ -22,6 +22,8 @@
 #include "test_module_helper.h"
 #include "sr_common.h"
 #include "test_data.h"
+#include <stdio.h>
+#include <unistd.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <setjmp.h>
@@ -91,6 +93,15 @@ createDataTreeTestModule()
     node = lyd_new_leaf(r, module, "id_ref", XP_TEST_MODULE_IDREF_VALUE);
     assert_non_null(node);
 
+    node = lyd_new_anydata(r, module, "xml-data", XP_TEST_MODULE_ANYXML_VALUE, LYD_ANYDATA_CONSTSTRING);
+    assert_non_null(node);
+
+    node = lyd_new_anydata(r, module, "any-data", XP_TEST_MODULE_ANYDATA_VALUE, LYD_ANYDATA_CONSTSTRING);
+    assert_non_null(node);
+
+    node = lyd_new_leaf(r, module, "instance_id", XP_TEST_MODULE_INSTANCE_ID_VALUE);
+    assert_non_null(node);
+
     /* leaf -list*/
     n = lyd_new_leaf(r, module, "numbers", "1");
     assert_non_null(n);
@@ -132,6 +143,23 @@ createDataTreeTestModule()
 
     n = lyd_new_leaf(node, module, "union", "infinity");
     assert_non_null(n);
+
+    /* user-ordered leaf-list items */
+    node = lyd_new_leaf(NULL, module, "ordered-numbers", "45");
+    assert_non_null(node);
+    assert_int_equal(0, lyd_insert_after(r, node));
+
+    node = lyd_new_leaf(NULL, module, "ordered-numbers", "12");
+    assert_non_null(node);
+    assert_int_equal(0, lyd_insert_after(r, node));
+
+    node = lyd_new_leaf(NULL, module, "ordered-numbers", "57");
+    assert_non_null(node);
+    assert_int_equal(0, lyd_insert_after(r, node));
+
+    node = lyd_new_leaf(NULL, module, "ordered-numbers", "0");
+    assert_non_null(node);
+    assert_int_equal(0, lyd_insert_after(r, node));
 
     /* list + list of leafrefs */
     node = lyd_new(NULL, module, "university");
@@ -346,7 +374,7 @@ createDataTreeLargeIETFinterfacesModule(size_t if_count)
             root = node;
         }
         snprintf(xpath, MAX_IF_LEN, template_type, i);
-        lyd_new_path(root, ctx, xpath, "ethernetCsmacd", 0, 0);
+        lyd_new_path(root, ctx, xpath, "iana-if-type:ethernetCsmacd", 0, 0);
 
         snprintf(xpath, MAX_IF_LEN, template_desc, i);
         lyd_new_path(root, ctx, xpath, "ethernet interface", 0, 0);
@@ -388,7 +416,7 @@ createDataTreeIETFinterfacesModule(){
     node = lyd_new(root, module_interfaces, "interface");
     lyd_new_leaf(node, module_interfaces, "name", "eth0");
     lyd_new_leaf(node, module_interfaces, "description", "Ethernet 0");
-    lyd_new_leaf(node, module_interfaces, "type", "ethernetCsmacd");
+    lyd_new_leaf(node, module_interfaces, "type", "iana-if-type:ethernetCsmacd");
     lyd_new_leaf(node, module_interfaces, "enabled", "true");
     node = lyd_new(node, module_ip, "ipv4");
     lyd_new_leaf(node, module_ip, "enabled", "true");
@@ -400,7 +428,7 @@ createDataTreeIETFinterfacesModule(){
     node = lyd_new(root, module_interfaces, "interface");
     lyd_new_leaf(node, module_interfaces, "name", "eth1");
     lyd_new_leaf(node, module_interfaces, "description", "Ethernet 1");
-    lyd_new_leaf(node, module_interfaces, "type", "ethernetCsmacd");
+    lyd_new_leaf(node, module_interfaces, "type", "iana-if-type:ethernetCsmacd");
     lyd_new_leaf(node, module_interfaces, "enabled", "true");
     node = lyd_new(node, module_ip, "ipv4");
     lyd_new_leaf(node, module_ip, "enabled", "true");
@@ -412,11 +440,51 @@ createDataTreeIETFinterfacesModule(){
     node = lyd_new(root, module_interfaces, "interface");
     lyd_new_leaf(node, module_interfaces, "name", "gigaeth0");
     lyd_new_leaf(node, module_interfaces, "description", "GigabitEthernet 0");
-    lyd_new_leaf(node, module_interfaces, "type", "ethernetCsmacd");
+    lyd_new_leaf(node, module_interfaces, "type", "iana-if-type:ethernetCsmacd");
     lyd_new_leaf(node, module_interfaces, "enabled", "false");
 
     assert_int_equal(0, lyd_validate(&root, LYD_OPT_STRICT | LYD_OPT_CONFIG, NULL));
     assert_int_equal(SR_ERR_OK, sr_save_data_tree_file(TEST_DATA_SEARCH_DIR"ietf-interfaces"SR_STARTUP_FILE_EXT, root));
+
+    lyd_free_withsiblings(root);
+    ly_ctx_destroy(ctx, NULL);
+}
+
+void
+createDataTreeIETFinterfacesModuleMerge(){
+
+    struct ly_ctx *ctx = ly_ctx_new(TEST_SCHEMA_SEARCH_DIR);
+    assert_non_null(ctx);
+
+    struct lyd_node *root = NULL;
+
+    const struct lys_module *module_interfaces = ly_ctx_load_module(ctx, "ietf-interfaces", NULL);
+    const struct lys_module *module_ip = ly_ctx_load_module(ctx, "ietf-ip", NULL);
+    const struct lys_module *module = ly_ctx_load_module(ctx, "iana-if-type", "2014-05-08");
+    assert_non_null(module);
+    struct lyd_node *node = NULL;
+
+    root = lyd_new(NULL, module_interfaces, "interfaces");
+    node = lyd_new(root, module_interfaces, "interface");
+    lyd_new_leaf(node, module_interfaces, "name", "eth0");
+    lyd_new_leaf(node, module_interfaces, "description", "Ethernet 0 for Merging");
+    lyd_new_leaf(node, module_interfaces, "type", "iana-if-type:ethernetCsmacd");
+    lyd_new_leaf(node, module_interfaces, "enabled", "false");
+    node = lyd_new(node, module_ip, "ipv4");
+    lyd_new_leaf(node, module_ip, "enabled", "false");
+    lyd_new_leaf(node, module_ip, "mtu", "1600");
+
+    node = lyd_new(root, module_interfaces, "interface");
+    lyd_new_leaf(node, module_interfaces, "name", "vdsl0");
+    lyd_new_leaf(node, module_interfaces, "description", "Vdsl 0 for Merging");
+    lyd_new_leaf(node, module_interfaces, "type", "iana-if-type:vdsl");
+    lyd_new_leaf(node, module_interfaces, "enabled", "true");
+    node = lyd_new(node, module_ip, "ipv4");
+    lyd_new_leaf(node, module_ip, "enabled", "true");
+    lyd_new_leaf(node, module_ip, "mtu", "1500");
+
+    assert_int_equal(0, lyd_validate(&root, LYD_OPT_STRICT | LYD_OPT_CONFIG, NULL));
+    assert_int_equal(SR_ERR_OK, sr_save_data_tree_file(TEST_DATA_SEARCH_DIR"ietf-interfaces.merge.xml", root));
 
     lyd_free_withsiblings(root);
     ly_ctx_destroy(ctx, NULL);
@@ -485,5 +553,13 @@ createDataTreeStateModule()
     lyd_free_withsiblings(r1);
 
     ly_ctx_destroy(ctx, NULL);
+}
 
+void
+skip_if_daemon_running()
+{
+    if (-1 != access(SR_DAEMON_PID_FILE, F_OK)) {
+        printf("Skipping the testcase since sysrepod is running.");
+        skip();
+    }
 }

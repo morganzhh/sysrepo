@@ -11,69 +11,35 @@
 - [libev](http://software.schmorp.de/pkg/libev.html)
 - [libredblack](http://libredblack.sourceforge.net/) or [GNU libavl](http://adtinfo.org/) (either of these two)
 
-#### Optional tools for running tests and building documentation:
+#### (Optional) Tools for running tests and building documentation:
 - [CMocka](https://cmocka.org/)
 - [valgrind](http://valgrind.org/)
-- [doxygen](www.doxygen.org)
+- [doxygen](http://www.doxygen.org)
 
-#### Bindings for other languages:
-[swig](http://www.swig.org/) must be installed. Bindigs are generated during `make` phase.
-- Python bindings require python-dev to be installed.
+#### (Optional) Bindings for other languages:
+[Swig](http://www.swig.org/) must be installed. Bindigs are generated during `make` phase.
+- Python bindings require `python-dev` to be installed.
+- Lua bindings require `lua5.2` to be installed.
+
+#### (Optional) Netopeer2 NETCONF server
+Can be installed to enable remote management via NETCONF. Requires [libnetconf2](https://github.com/CESNET/libnetconf2) library. Follow the instructions on [Netopeer2](https://github.com/CESNET/Netopeer2) site, or have a look at the [Dockerfile](deploy/docker/sysrepo-netopeer2/Dockerfile) for Sysrepo & Netopeer2 integration.
 
 #### Installation of required libraries:
 On Debian-like Linux distributions:
-- `apt-get install cmake libev-dev libavl-dev protobuf-c-compiler`
-- libyang needs to be installed from sources
+- `apt-get install git cmake build-essential bison flex libpcre3-dev libev-dev libavl-dev libprotobuf-c-dev protobuf-c-compiler`
+- (optional) `apt-get install valgrind swig python-dev lua5.2`
+- CMocka and libyang need to be installed from sources
 
 On FreBSD:
-- `pkg install cmake protobuf protobuf-c libev libredblack`
-- libyang needs to be installed from sources
+- `pkg install cmake git protobuf protobuf-c libev libredblack`
+- CMocka and libyang need to be installed from sources
 
 On Mac OS X:
-- `brew cmake protobuf protobuf-c libev`
-- libyang and libredblack need to be installed from sources
+- `brew install cmake protobuf protobuf-c libev`
+- CMocka, libyang and libredblack need to be installed from sources
 
 
 ## Installation of required libraries from sources
-
-#### LibYang:
-```
-# apt-get install libpcre3-dev
-$ git clone https://github.com/CESNET/libyang.git
-$ cd libyang; mkdir build; cd build
-$ cmake ..
-$ make
-# make install
-```
-
-#### Google Protocol Buffers:
-```
-# apt-get install autoconf libtool
-$ git clone https://github.com/google/protobuf.git
-$ cd protobuf
-$ ./autogen.sh
-$ ./configure
-$ make
-# make install
-```
-
-#### Protobuf-c:
-```
-$ git clone https://github.com/protobuf-c/protobuf-c.git
-$ cd protobuf-c
-$ ./autogen.sh && ./configure --prefix=/usr 
-$ make 
-# make install
-```
-
-#### libredblack:
-```
-$ git clone https://github.com/sysrepo/libredblack.git
-$ cd libredblack
-$ ./configure
-$ make
-# make install
-```
 
 #### CMocka:
 ```
@@ -85,6 +51,44 @@ $ make
 # make install
 ```
 
+#### Libyang:
+```
+# apt-get install libpcre3-dev
+$ git clone https://github.com/CESNET/libyang.git
+$ cd libyang; mkdir build; cd build
+$ cmake ..
+$ make
+# make install
+```
+
+#### Google Protocol Buffers (not needed if already installed from packages):
+```
+# apt-get install autoconf libtool
+$ git clone https://github.com/google/protobuf.git
+$ cd protobuf
+$ ./autogen.sh
+$ ./configure
+$ make
+# make install
+```
+
+#### Protobuf-c (not needed if already installed from packages):
+```
+$ git clone https://github.com/protobuf-c/protobuf-c.git
+$ cd protobuf-c
+$ ./autogen.sh && ./configure --prefix=/usr 
+$ make 
+# make install
+```
+
+#### libredblack (not needed if libavl/libredbalck already installed from packages):
+```
+$ git clone https://github.com/sysrepo/libredblack.git
+$ cd libredblack
+$ ./configure
+$ make
+# make install
+```
 
 ## Building sysrepo
 1) Get the source code and prepare the build directory:
@@ -118,6 +122,17 @@ $ make install
 make doc
 ```
 
+## Docker and sysrepo
+Sysrepo regulary builds docker images, the official image is [sysrepo/sysrepo-netopeer2](https://hub.docker.com/r/sysrepo/sysrepo-netopeer2/) and it is based on ubuntu 16.04.
+
+There are also dockerfiles for master and devel branches, the supported platforms are:
+- [Arch](./deploy/docker/sysrepo-netopeer2/platforms/Dockerfile.arch)
+- [Debian](./deploy/docker/sysrepo-netopeer2/platforms/Dockerfile.debian)
+- [Fedora](./deploy/docker/sysrepo-netopeer2/platforms/Dockerfile.fedora)
+- [Gentoo](./deploy/docker/sysrepo-netopeer2/platforms/Dockerfile.gentoo)
+- [Ubuntu](./deploy/docker/sysrepo-netopeer2/platforms/Dockerfile.ubuntu)
+
+All of the dockerfiles can be found here [platforms](./deploy/docker/sysrepo-netopeer2/platforms)
 
 ## Useful CMake options
 #### Changing build mode:
@@ -139,6 +154,18 @@ to `${CMAKE_INSTALL_LIBDIR}/sysrepo/plugins/` (e.g. `/usr/local/lib/sysrepo/plug
 
 #### Building with / without examples:
 By default, some [example programs](examples/) are built with sysrepo and several [example YANG modules](examples/yang/) are installed into sysrepo repository, along with some meaningless data. If you wish to not build and install them, use `BUILD_EXAMPLES` varibale as follows: `cmake -DBUILD_EXAMPLES:BOOL=FALSE ..`
+
+#### Adjusting timeouts:
+There are several timeouts that can be configured via CMake variables:
+
+CMake variable              | Default value | Description
+--------------------------- | ------------- | -----------
+`REQUEST_TIMEOUT`           | 3 sec         | Timeout (in seconds) for standard Sysrepo API requests.
+`LONG_REQUEST_TIMEOUT`      | 15 sec        | Timeout (in seconds) for Sysrepo API requests that can take longer than standard requests (commit, copy-config, rpc, action).
+`COMMIT_VERIFY_TIMEOUT`     | 10 sec        | Timeout (in seconds) that a commit request can wait for answer from commit verifiers and change notification subscribers.
+`OPER_DATA_PROVIDE_TIMEOUT` | 2 sec         | Timeout (in seconds) that a request can wait for operational data from data providers.
+`NOTIF_AGE_TIMEOUT`         | 60 min        | Timeout (in minutes) after which stored notifications will be aged out and erased from notification store.
+`NOTIF_TIME_WINDOW`         | 10 min        | Time window (in minutes) for notifications to be grouped into one data file (larger window produces larger data files).
 
 ## Using sysrepo
 By installation, three main parts of sysrepo are installed on the system: **sysrepoctl tool**, **sysrepo library** and **sysrepo daemon**.

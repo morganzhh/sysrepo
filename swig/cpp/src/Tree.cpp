@@ -28,7 +28,7 @@
 using namespace std;
 
 extern "C" {
-#include <sysrepo.h>
+#include "sysrepo.h"
 #include "sysrepo/trees.h"
 #include "sysrepo/values.h"
 }

@@ -24,7 +24,7 @@
 #include <iostream>
 
 extern "C" {
-#include <sysrepo.h>
+#include "sysrepo.h"
 #include "sysrepo/trees.h"
 }
 

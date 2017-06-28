@@ -35,7 +35,7 @@
 #include "Session.h"
 
 extern "C" {
-#include <sysrepo.h>
+#include "sysrepo.h"
 }
 
 using namespace std;
@@ -44,7 +44,7 @@ class Session
 {
 
 public:
-    Session(S_Connection conn, sr_datastore_t datastore = static_cast<sr_datastore_t>( DS_RUNNING ), \
+    Session(S_Connection conn, sr_datastore_t datastore = (sr_datastore_t) DS_RUNNING, \
             const sr_sess_options_t opts = SESS_DEFAULT, const char *user_name = NULL);
     Session(sr_session_ctx_t *sess, sr_sess_options_t opts = SESS_DEFAULT, S_Deleter deleter = NULL);
     void session_stop();
@@ -148,7 +148,7 @@ public:
     sr_subscription_ctx_t **swig_sub() { return &_sub;};
     sr_session_ctx_t *swig_sess() {return _sess->_sess;};
     std::vector<void*> wrap_cb_l;
-    void additional_cleanup(void *) {return;};
+    void additional_cleanup(void *private_ctx) {return;};
 
 private:
     sr_subscription_ctx_t *_sub;

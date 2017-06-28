@@ -82,6 +82,7 @@ public:
     S_Iter_Change get_changes_iter(const char *xpath);
     S_Change get_change_next(S_Iter_Change iter);
     ~Session();
+    sr_session_ctx_t *get() {return _sess;};
 
     S_Vals rpc_send(const char *xpath, S_Vals input);
     S_Trees rpc_send(const char *xpath, S_Trees input);

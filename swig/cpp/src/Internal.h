@@ -25,7 +25,7 @@
 #define S_Deleter std::shared_ptr<Deleter>
 
 extern "C" {
-#include "sysrepo.h"
+#include <sysrepo.h>
 #include "sysrepo/trees.h"
 }
 

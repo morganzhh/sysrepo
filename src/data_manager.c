@@ -525,7 +525,12 @@ dm_get_tmp_ly_ctx(dm_ctx_t *dm_ctx, sr_list_t *models_to_be_loaded, dm_tmp_ly_ct
         for (size_t i = 0; i < models_to_be_loaded->count; i++) {
             module_name = (char *) models_to_be_loaded->data[i];
             rc = md_get_module_info(dm_ctx->md_ctx, module_name, NULL, &module);
-            CHECK_RC_LOG_GOTO(rc, cleanup, "Failed to get md_get_info for %s", module_name);
+            //CHECK_RC_LOG_GOTO(rc, cleanup, "Failed to get md_get_info for %s", module_name);
+            if (rc != SR_ERR_OK) {
+                SR_LOG_ERR("Failed to get md_get_info for %s", module_name);
+                rc = SR_ERR_OK;
+                continue;
+            }
 
             ly_module = lys_parse_path(t_ctx->ctx, module->filepath, LYS_IN_YANG);
             if (NULL == ly_module) {

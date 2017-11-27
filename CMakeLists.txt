@@ -168,16 +168,16 @@ set(STORE_CONFIG_CHANGE_NOTIF 1 CACHE BOOL
     "Save config-change notifications (RFC 6470) in the notification store (slows down the commit process).")
 
 # timeouts
-set(REQUEST_TIMEOUT 3 CACHE INTEGER
+set(REQUEST_TIMEOUT 15 CACHE INTEGER
     "Timeout (in seconds) for standard Sysrepo API requests.")
 
-set(LONG_REQUEST_TIMEOUT 15 CACHE INTEGER
+set(LONG_REQUEST_TIMEOUT 75 CACHE INTEGER
     "Timeout (in seconds) for Sysrepo API requests that can take longer than standard requests (commit, copy-config, rpc, action).")
 
-set(COMMIT_VERIFY_TIMEOUT 10 CACHE INTEGER
+set(COMMIT_VERIFY_TIMEOUT 50 CACHE INTEGER
     "Timeout (in seconds) that a commit request can wait for answer from commit verifiers and change notification subscribers.")
 
-set(OPER_DATA_PROVIDE_TIMEOUT 2 CACHE INTEGER
+set(OPER_DATA_PROVIDE_TIMEOUT 10 CACHE INTEGER
     "Timeout (in seconds) that a request can wait for operational data from data providers.")
 
 set(NOTIF_AGE_TIMEOUT 60 CACHE INTEGER

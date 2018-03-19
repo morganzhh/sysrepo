@@ -145,7 +145,7 @@ set(ENABLE_NACM 1 CACHE BOOL
 set(NACM_RECOVERY_UID 0 CACHE INTEGER
     "UID to be used to identify NACM recovery session, default value is 0.")
 
-set(ENABLE_NOTIF_STORE 1 CACHE BOOL
+set(ENABLE_NOTIF_STORE 0 CACHE BOOL
     "Enable event notifications store & notifications replay.")
 
 set(USE_SR_MEM_MGMT 1 CACHE BOOL

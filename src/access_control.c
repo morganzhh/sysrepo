@@ -144,6 +144,11 @@ ac_check_file_access(const char *file_name, const ac_operation_t operation)
 static int
 ac_set_identity(const uid_t euid, const gid_t egid)
 {
+    //sysrepo time out issue,  setegid and seteuid hang up when there are multiple sysrepd 
+    // work around by return OK and don't set group id and user id to 'root'
+    // We need do more test on this fix
+    return SR_ERR_OK;
+
     int rc = SR_ERR_OK;
     int ret = -1;
     char *username = NULL;

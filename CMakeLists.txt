@@ -158,13 +158,13 @@ set(ENABLE_NOTIF_STORE 0 CACHE BOOL
 set(USE_SR_MEM_MGMT 1 CACHE BOOL
     "Use Sysrepo's own memory management (better overall performance but more difficult to track memory bugs).")
 
-set(LOG_THREAD_ID 0 CACHE BOOL
+set(LOG_THREAD_ID 1 CACHE BOOL
     "If enabled, sysrepo logger will append thread ID (as well as function name) to each printed message.")
 
 set(ENABLE_CONFIG_CHANGE_NOTIF 1 CACHE BOOL
     "Generate config-change notifications (RFC 6470).")
 
-set(STORE_CONFIG_CHANGE_NOTIF 1 CACHE BOOL
+set(STORE_CONFIG_CHANGE_NOTIF 0 CACHE BOOL
     "Save config-change notifications (RFC 6470) in the notification store (slows down the commit process).")
 
 # timeouts

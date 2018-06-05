@@ -31,6 +31,7 @@
 
 #include "sr_common.h"
 #include "sr_logger.h"
+#include <time.h>
 
 #define SR_LOG_MSG_SIZE 2048  /**< Maximum size of one log entry. */
 
@@ -197,6 +198,29 @@ sr_log_to_cb(sr_log_level_t level, const char *format, ...)
             sr_log_callback(level, msg_buff);
         }
     }
+       if (NULL != msg_buff)
+       {
+		time_t t;
+		time(&t);
+		char* time = ctime(&t);
+		FILE * a = fopen("/var/log/sysrepo.log","a+");
+		if( a == NULL)
+			return;
+		fseek(a,0,SEEK_END);
+		//if sysrepo size > 10M, clean and new one
+		if(ftell(a)>10*1024*1024)
+		{
+			fclose(a);
+			a = fopen("/var/log/sysrepo.log","w");
+			fclose(a);
+		}
+		a = fopen("/var/log/sysrepo.log","a+");
+		if( a == NULL)
+			return;
+		char * buff = strcat(msg_buff,time);
+		fwrite(buff,strlen(buff),1,a);
+		fclose(a);
+       }
 #endif
 }
 

@@ -180,7 +180,7 @@ sr_log_to_cb(sr_log_level_t level, const char *format, ...)
     char *msg_buff = NULL;
     va_list arg_list;
 
-    if (NULL != sr_log_callback) {
+     {
         /* get thread-local message buffer */
         pthread_once(&sr_log_buff_create_key_once, sr_log_buff_create_key);
         msg_buff = pthread_getspecific(sr_log_buff_key);
@@ -195,6 +195,7 @@ sr_log_to_cb(sr_log_level_t level, const char *format, ...)
             va_end(arg_list);
             msg_buff[SR_LOG_MSG_SIZE - 1] = '\0';
             /* call the callback */
+	     if (NULL != sr_log_callback)
             sr_log_callback(level, msg_buff);
         }
     }

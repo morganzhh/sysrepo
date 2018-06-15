@@ -212,10 +212,8 @@ sr_log_to_cb(sr_log_level_t level, const char *format, ...)
 		if(ftell(a)>10*1024*1024)
 		{
 			fclose(a);
-			a = fopen("/var/log/sysrepo.log","w");
-			fclose(a);
+			a = fopen("/var/log/sysrepo.log","w+");
 		}
-		a = fopen("/var/log/sysrepo.log","a+");
 		if( a == NULL)
 			return;
 		char * buff = strcat(msg_buff,time);

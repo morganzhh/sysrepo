@@ -57,6 +57,7 @@ typedef struct sr_session_ctx_s {
     size_t error_cnt;             /**< Number of errors that occurred within last API call. */
     bool notif_session;           /**< Distinguishes internal notification session from other ones. */
     uint32_t commit_id;           /**< ID of the commit in case that this is a notification session (0 otherwise). */
+    uint32_t nc_session_id;                  /**< Assigned session identifier. */
 } sr_session_ctx_t;
 
 /**

@@ -535,7 +535,7 @@ sr_session_start_user(sr_conn_ctx_t *conn_ctx, const char *user_name, sr_datasto
     rc = cl_request_process(session, msg_req, &msg_resp, NULL, SR__OPERATION__SESSION_START);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Error by processing of the request.");
 
-    session->id = msg_resp->response->session_start_resp->session_id;
+    session->id = msg_resp->response->session_start_resp->session_id;	
     sr_msg_free(msg_req);
     sr_msg_free(msg_resp);
 
@@ -762,6 +762,17 @@ sr_session_get_id(sr_session_ctx_t *session)
         return 0;
     }
 }
+
+void
+sr_nc_session_set_id(sr_session_ctx_t *session, uint32_t id)
+{
+    if (NULL != session) {
+         session->nc_session_id = id;
+    } else {
+        SR_LOG_ERR_MSG("NULL passed to session argument");
+    }
+}
+
 int
 sr_list_schemas(sr_session_ctx_t *session, sr_schema_t **schemas, size_t *schema_cnt)
 {
@@ -2076,6 +2087,9 @@ sr_commit(sr_session_ctx_t *session)
     CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to create a new Sysrepo memory context.");
     rc = sr_gpb_req_alloc(sr_mem, SR__OPERATION__COMMIT, session->id, &msg_req);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Cannot allocate GPB message.");
+    /*set nc_session id in msg, it is used to be filled in session-id in notification change yang*/
+    msg_req->has_nc_session_id = 1;
+    msg_req->nc_session_id = session->nc_session_id;
 
     /* send the request and receive the response */
     rc = cl_request_process(session, msg_req, &msg_resp, NULL, SR__OPERATION__COMMIT);

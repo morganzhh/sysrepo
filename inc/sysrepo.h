@@ -584,6 +584,7 @@ int sr_set_error(sr_session_ctx_t *session, const char *message, const char *xpa
  * @return session id or 0 in case of error
  */
 uint32_t sr_session_get_id(sr_session_ctx_t *session);
+void sr_nc_session_set_id(sr_session_ctx_t *session, uint32_t id);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Data Retrieval API (get / get-config functionality)

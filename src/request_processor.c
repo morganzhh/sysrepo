@@ -335,7 +335,7 @@ rp_generate_config_change_notification(rp_ctx_t *rp_ctx, rp_session_t *session, 
 
     size_t diff_count = rp_count_changes_in_difflists(diff_lists);
     SR_LOG_DBG("%zu instance of /ietf-netconf-notifications/netconf-config-change/edit list will be created", diff_count);
-
+	
     /* target + operation */
     val_cnt += diff_count * 2;
 
@@ -346,7 +346,7 @@ rp_generate_config_change_notification(rp_ctx_t *rp_ctx, rp_session_t *session, 
     CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to set xpath");
 
     values[0].type = SR_UINT32_T;
-    values[0].data.uint32_val = session->id;
+    values[0].data.uint32_val = session->req->nc_session_id;
 
     rc = sr_val_set_xpath(&values[1], CONFIG_CHANGE_USERNAME_XPATH);
     CHECK_RC_MSG_GOTO(rc, cleanup, "Failed to set xpath");

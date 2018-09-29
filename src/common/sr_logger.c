@@ -209,7 +209,7 @@ sr_log_to_cb(sr_log_level_t level, const char *format, ...)
 			return;
 		fseek(a,0,SEEK_END);
 		//if sysrepo size > 10M, clean and new one
-		if(ftell(a)>10*1024*1024)
+		if(ftell(a)>100*1024*1024)
 		{
 			fclose(a);
 			a = fopen("/var/log/sysrepo.log","w+");
